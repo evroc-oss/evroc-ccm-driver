@@ -1,0 +1,73 @@
+# Example 2: Multi-Port LoadBalancer Service
+#
+# Exposes an application on multiple ports through a single LoadBalancer.
+# The CCM creates one BackendService + L4Route per port, but they all share
+# the same BackendPool (same set of nodes).
+#
+# Resources created by the CCM:
+#   - PublicIP              (default-myapp-ip)
+#   - BackendPool           (default-myapp-pool)              — shared across all listeners
+#   - BackendService        (default-myapp-http-80-svc)       — port 80 → NodePort 1
+#   - BackendService        (default-myapp-https-443-svc)     — port 443 → NodePort 2
+#   - BackendService        (default-myapp-metrics-9090-svc)  — port 9090 → NodePort 3
+#   - L4Route               (default-myapp-http-80-route)
+#   - L4Route               (default-myapp-https-443-route)
+#   - L4Route               (default-myapp-metrics-9090-route)
+#   - LoadBalancer           (default-myapp)                   — 3 TCP listeners
+#
+# Traffic flow (per port):
+#   Client :80  → LB :80  → Node :31080 → Pod :8080
+#   Client :443 → LB :443 → Node :31443 → Pod :8443
+#   Client :9090 → LB :9090 → Node :31090 → Pod :9090
+#
+# Usage:
+#   kubectl apply -f examples/02-multi-port-service.yaml
+#   kubectl get svc myapp -w
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myapp
+  namespace: default
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: myapp
+  template:
+    metadata:
+      labels:
+        app: myapp
+    spec:
+      containers:
+        - name: app
+          image: myapp:latest
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: https
+              containerPort: 8443
+            - name: metrics
+              containerPort: 9090
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: myapp
+  namespace: default
+spec:
+  type: LoadBalancer
+  selector:
+    app: myapp
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080
+    - name: https
+      port: 443
+      targetPort: 8443
+    - name: metrics
+      port: 9090
+      targetPort: 9090
