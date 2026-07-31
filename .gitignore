@@ -1,0 +1,21 @@
+# Binaries
+/evroc-ccm
+/bin/
+
+# Go
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.out
+coverage.html
+sbom.spdx.json

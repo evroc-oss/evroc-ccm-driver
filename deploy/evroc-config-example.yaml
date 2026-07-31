@@ -1,0 +1,62 @@
+---
+# Example evroc CCM configuration file.
+#
+# The auth, api, and context sections use the evroc SDK's own configuration
+# schema, which is also what the CSI driver reads, so a config written for one
+# component is understood by the other. The network section is CCM-specific and
+# is ignored by components that do not recognise it.
+#
+# Each component authenticates as its own service account, so each holds only
+# the permissions of its own role: the CCM binds kubernetesCCMAgent and the CSI
+# driver binds kubernetesCSIAgent.
+#
+# Usage:
+#   1. Create a service account and credential for the CCM:
+#        evroc iam serviceaccount create ccm-agent
+#        evroc iam serviceaccount credential create ccm-agent-key \
+#          --service-account ccm-agent
+#        evroc iam rolebinding assign \
+#          --principal "/iam/projects/<project-id>/serviceAccounts/ccm-agent" \
+#          --role /iam/roles/kubernetesCCMAgent
+#
+#      The credential's private key is printed only once, at creation.
+#
+#   2. Copy this file and fill in your values:
+#        cp deploy/evroc-config-example.yaml my-config.yaml
+#
+#   3. Create the Kubernetes secret:
+#        kubectl create namespace evroc-system
+#        kubectl create secret generic evroc-config \
+#          --namespace evroc-system \
+#          --from-file=config.yaml=my-config.yaml
+
+auth:
+  # The bare service account name, exactly as passed to
+  # "evroc iam serviceaccount create". Do not append the project: the SDK
+  # derives the OAuth2 client ID as <service_account_id>_<project>, so a
+  # project-qualified value here yields <name>_<project>_<project> and
+  # authentication fails with "invalid_client".
+  service_account_id: "ccm-agent"
+  # The jwt-bearer signing key: a file path or a base64-encoded JWK.
+  service_account_secret: "changeme"
+
+# api:
+#   base_url: "https://api.evroc.com"  # default
+
+context:
+  organization: "my-org"
+  project: "my-project"
+  region: "se-sto"
+
+# Network configuration (optional, CCM-specific).
+# When omitted, the project's default VPC, the default subnet in each zone
+# (default-{region}-{zone}), and IPv4-only networking are used.
+# network:
+#   vpcRef: "vpc-prod"
+#   subnetRefs:
+#     a: "subnet-a"
+#     b: "subnet-b"
+#   # One of "ipv4-only" (default), "dual-stack", or "ipv6-only".
+#   # Load balancer frontends are always IPv4; "ipv6-only" makes the load
+#   # balancer reach backends over IPv6.
+#   stackType: "ipv4-only"

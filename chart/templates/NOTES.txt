@@ -1,0 +1,17 @@
+evroc Cloud Controller Manager has been installed.
+
+Controllers enabled: {{ join ", " .Values.ccm.controllers }}
+
+The CCM will automatically label nodes with:
+  - topology.kubernetes.io/region
+  - topology.kubernetes.io/zone
+  - node.kubernetes.io/instance-type
+
+IMPORTANT: Nodes must be started with --cloud-provider=external
+for the CCM to initialize them.
+
+To verify the deployment:
+  kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "evroc-ccm.name" . }}
+
+To check node labels after initialization:
+  kubectl get nodes --show-labels
