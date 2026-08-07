@@ -1,0 +1,77 @@
+{{- if .Values.rbac.create -}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "evroc-ccm.fullname" . }}
+  labels:
+    {{- include "evroc-ccm.labels" . | nindent 4 }}
+rules:
+  # Node management (topology labeling, provider ID, addresses)
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["nodes/status"]
+    verbs: ["patch"]
+  # Events for reporting node updates
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch", "update"]
+  # The controller manager builds a delegated client per controller, which
+  # reads the controller's ServiceAccount and mints a token for it.
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "create"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    verbs: ["create"]
+  # Services for the load balancer controller
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["services/status"]
+    verbs: ["patch", "update"]
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch"]
+  # Leader election
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "evroc-ccm.fullname" . }}
+  labels:
+    {{- include "evroc-ccm.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "evroc-ccm.fullname" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "evroc-ccm.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+---
+# The controller manager's delegated authentication reads the
+# extension-apiserver-authentication ConfigMap in kube-system to load the
+# request-header CA. Without this binding the process exits at startup.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "evroc-ccm.fullname" . }}-authentication-reader
+  namespace: kube-system
+  labels:
+    {{- include "evroc-ccm.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "evroc-ccm.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

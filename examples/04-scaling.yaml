@@ -1,0 +1,88 @@
+# Example 4: Node Scaling and Backend Reconciliation
+#
+# This example demonstrates how the CCM keeps the LoadBalancer's backend pool
+# in sync as nodes join and leave the cluster.
+#
+# The CCM does NOT decide when to scale — Kubernetes drives that.
+# The CCM reacts to node changes by reconciling the BackendPool.
+#
+# Scenario: 3 nodes → scale to 5 → scale down to 2
+#
+# ┌─────────────────────────────────────────────────────────────────────────┐
+# │ Initial state (3 nodes)                                                │
+# │                                                                        │
+# │   Service type:LB ──► CCM creates BackendPool with 3 VM refs:         │
+# │                        /compute/.../virtualMachines/node-1             │
+# │                        /compute/.../virtualMachines/node-2             │
+# │                        /compute/.../virtualMachines/node-3             │
+# │                                                                        │
+# │ Scale up to 5 nodes                                                    │
+# │                                                                        │
+# │   Kubernetes detects node-4 and node-5 joined.                         │
+# │   K8s calls CCM.UpdateLoadBalancer(nodes=[1,2,3,4,5])                  │
+# │   CCM.syncBackends():                                                  │
+# │     - current pool: [node-1, node-2, node-3]                          │
+# │     - desired:      [node-1, node-2, node-3, node-4, node-5]          │
+# │     - action: AddVMTo(node-4), AddVMTo(node-5)                        │
+# │                                                                        │
+# │ Scale down to 2 nodes                                                  │
+# │                                                                        │
+# │   Kubernetes detects node-2, node-4, node-5 removed.                   │
+# │   K8s calls CCM.UpdateLoadBalancer(nodes=[1,3])                        │
+# │   CCM.syncBackends():                                                  │
+# │     - current pool: [node-1, node-2, node-3, node-4, node-5]          │
+# │     - desired:      [node-1, node-3]                                   │
+# │     - action: RemoveVMFrom(node-2), RemoveVMFrom(node-4),             │
+# │               RemoveVMFrom(node-5)                                     │
+# └─────────────────────────────────────────────────────────────────────────┘
+#
+# Try it:
+#   kubectl apply -f examples/04-scaling.yaml
+#   kubectl get svc scaling-demo -w                       # wait for EXTERNAL-IP
+#
+#   # Scale the Deployment (pods change, but LB backends are nodes, not pods):
+#   kubectl scale deployment scaling-demo --replicas=10
+#   # Backend pool stays the same — only node changes trigger CCM updates.
+#
+#   # To actually change backends, scale the node pool (cluster-level):
+#   # e.g., via cluster autoscaler or:
+#   #   evroc compute virtual-machines create --name node-4 ...
+#   #   kubeadm join ...
+#   # The CCM will automatically add node-4 to the backend pool.
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scaling-demo
+  namespace: default
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: scaling-demo
+  template:
+    metadata:
+      labels:
+        app: scaling-demo
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scaling-demo
+  namespace: default
+spec:
+  type: LoadBalancer
+  selector:
+    app: scaling-demo
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80

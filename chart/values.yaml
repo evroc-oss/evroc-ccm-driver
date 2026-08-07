@@ -1,0 +1,108 @@
+# Default values for evroc-ccm.
+
+# evroc Platform Configuration
+evroc:
+  # Name of existing Secret containing config.yaml with evroc credentials.
+  # REQUIRED: You must create this Secret before installing the chart.
+  # The Secret must contain a key named "config.yaml" with the full configuration.
+  #
+  # This secret can be shared with the evroc CSI driver — both components
+  # read only the sections they need and ignore the rest.
+  #
+  # Example:
+  #   kubectl create secret generic evroc-config \
+  #     --namespace evroc-system \
+  #     --from-file=config.yaml=my-config.yaml
+  existingConfigSecret: ""
+
+# CCM Deployment configuration
+ccm:
+  replicas: 1
+
+  image:
+    repository: ghcr.io/evroc-oss/evroc-ccm-driver
+    tag: v0.1.2
+    pullPolicy: IfNotPresent
+
+  # Controllers to enable. Names must match k8s.io/cloud-provider/names.
+  # Available:
+  #   cloud-node-controller            — node topology labeling, provider ID, addresses
+  #   cloud-node-lifecycle-controller  — detect shutdown instances and taint nodes
+  #   service-lb-controller            — reconcile type: LoadBalancer services
+  controllers:
+    - cloud-node-controller
+    - cloud-node-lifecycle-controller
+    - service-lb-controller
+
+  # Run in the host network namespace and use the node's resolver. Cluster DNS
+  # is unavailable while nodes are still uninitialized, which is exactly when
+  # the CCM must run, so it cannot depend on it.
+  hostNetwork: true
+  dnsPolicy: Default
+
+  # Kubernetes API verbosity (0-10)
+  verbosity: 2
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  # Node selector — empty by default. Control-plane placement is expressed as
+  # node affinity below rather than here, because a nodeSelector matches on the
+  # label's exact value: kubeadm sets
+  # node-role.kubernetes.io/control-plane to "" while k3s and RKE2 set it to
+  # "true", so no single nodeSelector value works on every distribution.
+  nodeSelector: {}
+
+  # Tolerations — the CCM tolerates everything.
+  #
+  # It has to run before the cluster is functional: every node starts with the
+  # uninitialized taint and only the CCM removes it. On a fresh cluster that
+  # also keeps CoreDNS pending, and the CCM needs DNS to reach the evroc API,
+  # so a narrower set of tolerations deadlocks the bootstrap — the CCM waits
+  # for DNS, and DNS waits for the CCM.
+  tolerations:
+    - operator: Exists
+
+  # Prefer control-plane nodes, matching on the label's presence so that both
+  # the kubeadm ("") and k3s/RKE2 ("true") conventions are accepted. This is a
+  # preference rather than a requirement so the CCM can still start on
+  # clusters that do not label their control plane.
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+
+  # Additional environment variables
+  extraEnv: []
+
+  # Additional arguments to the CCM binary
+  extraArgs: []
+
+# RBAC configuration
+rbac:
+  create: true
+
+# Service Account configuration
+serviceAccount:
+  create: true
+  annotations: {}
+  # Override the service account name (auto-generated if empty)
+  name: ""
+
+# Image pull secrets
+imagePullSecrets: []
+
+# Global annotations added to all resources
+annotations: {}
+
+# Global labels added to all resources
+labels: {}
