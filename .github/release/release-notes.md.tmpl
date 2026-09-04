@@ -1,0 +1,40 @@
+Release @VERSION@
+
+## Installation
+
+### Using Helm (OCI Registry)
+
+```bash
+helm install evroc-ccm oci://ghcr.io/@REPOSITORY_OWNER@/charts/evroc-ccm --version @VERSION_NO_V@
+```
+
+### Using Helm (GitHub Release)
+
+```bash
+helm install evroc-ccm https://github.com/@REPOSITORY@/releases/download/@VERSION@/evroc-ccm-@VERSION_NO_V@.tgz
+```
+
+## Container Images
+
+- `ghcr.io/@REPOSITORY@:@VERSION@`
+- Signed with Cosign (keyless)
+- SBOM and SLSA provenance attestations available
+
+## Verification
+
+Verify the image signature:
+
+```bash
+cosign verify ghcr.io/@REPOSITORY@:@VERSION@ \
+  --certificate-identity=https://github.com/@REPOSITORY@/.github/workflows/release.yml@refs/tags/@VERSION@ \
+  --certificate-oidc-issuer=https://token.actions.githubusercontent.com
+```
+
+Verify the Helm chart signature:
+
+```bash
+cosign verify-blob evroc-ccm-@VERSION_NO_V@.tgz \
+  --bundle evroc-ccm-@VERSION_NO_V@.tgz.bundle \
+  --certificate-identity=https://github.com/@REPOSITORY@/.github/workflows/release.yml@refs/tags/@VERSION@ \
+  --certificate-oidc-issuer=https://token.actions.githubusercontent.com
+```

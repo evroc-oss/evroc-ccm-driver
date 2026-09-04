@@ -1,0 +1,71 @@
+# Example 3: LoadBalancer with a Pre-Allocated Static IP
+#
+# By default, the CCM allocates a new PublicIP for every LoadBalancer Service.
+# If you want to use a specific, pre-existing PublicIP (e.g., for DNS stability
+# across service recreations), set the ccm.evroc.com/public-ip-ref annotation.
+#
+# With this annotation:
+#   - CCM skips PublicIP allocation and uses the provided ref directly
+#   - On Service deletion, CCM does NOT delete the PublicIP (it's user-managed)
+#   - The rest of the resource stack (BackendPool, BackendServices, L4Routes, LB) is
+#     created and cleaned up as normal
+#
+# Step 1: Allocate the IP ahead of time via the evroc CLI or SDK:
+#
+#   evroc networking public-ips create --name my-static-ip --region se-sto
+#   evroc networking public-ips get my-static-ip
+#   # Note the fully qualified ref from the output
+#
+# Step 2: Apply this manifest with the ref:
+#
+#   kubectl apply -f examples/03-static-ip.yaml
+#
+# Step 3: Point your DNS to the IP. Even if you delete and recreate the Service,
+#          the same IP will be reused as long as the annotation stays the same.
+#
+# Cleanup:
+#   kubectl delete -f examples/03-static-ip.yaml
+#   # The LB stack is deleted, but the PublicIP is preserved.
+#   # Delete it manually when no longer needed:
+#   evroc networking public-ips delete my-static-ip
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      containers:
+        - name: api
+          image: api-server:latest
+          ports:
+            - containerPort: 8080
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: default
+  annotations:
+    # Fully qualified ref to a pre-existing PublicIP.
+    # Format: /networking/projects/<project>/regions/<region>/publicIPs/<name>
+    ccm.evroc.com/public-ip-ref: "/networking/projects/my-project/regions/se-sto/publicIPs/my-static-ip"
+spec:
+  type: LoadBalancer
+  selector:
+    app: api
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080

@@ -1,0 +1,69 @@
+# Example 1: Basic LoadBalancer Service
+#
+# This deploys a web application and exposes it via a LoadBalancer.
+# The CCM handles everything automatically:
+#
+#   1. You create a Service with type: LoadBalancer
+#   2. CCM allocates a PublicIP in evroc  (default-nginx-ip)
+#   3. CCM waits for the PublicIP to become Ready
+#   4. CCM creates the full LoadBalancer resource stack:
+#        - BackendPool          (default-nginx-pool)         — groups the node VMs
+#        - BackendService       (default-nginx-http-80-svc)  — maps port 80 → NodePort
+#        - L4Route              (default-nginx-http-80-route) — routes listener to backend service
+#        - LoadBalancer          (default-nginx)              — the L4 LB with a TCP listener on port 80
+#   5. CCM reads the allocated IP and writes it back to Service.status.loadBalancer.ingress
+#
+# Traffic flow:
+#   Client :80 → PublicIP → LoadBalancer :80 → Node :30080 (NodePort) → kube-proxy → Pod :80
+#
+# Prerequisites:
+#   - A Kubernetes cluster on evroc with --cloud-provider=external
+#   - The evroc CCM running (see deploy/evroc-ccm.yaml)
+#
+# Usage:
+#   kubectl apply -f examples/01-basic-loadbalancer.yaml
+#   kubectl get svc nginx -w    # watch until EXTERNAL-IP appears
+#   curl http://<EXTERNAL-IP>
+#
+# Cleanup:
+#   kubectl delete -f examples/01-basic-loadbalancer.yaml
+#   # CCM automatically deletes: LoadBalancer, L4Route, BackendService, BackendPool, PublicIP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx
+  namespace: default
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx
+  namespace: default
+spec:
+  type: LoadBalancer
+  selector:
+    app: nginx
+  ports:
+    - name: http
+      port: 80          # The port the LB listens on (frontend)
+      targetPort: 80    # The port on the pod
+      # nodePort is auto-assigned by Kubernetes (e.g., 30080)
+      # The CCM uses this NodePort as the BackendService port

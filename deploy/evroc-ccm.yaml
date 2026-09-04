@@ -1,0 +1,197 @@
+---
+# Source: evroc-ccm/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: evroc-ccm
+  namespace: evroc-system
+  labels:
+    helm.sh/chart: evroc-ccm-0.1.3
+    app.kubernetes.io/name: evroc-ccm
+    app.kubernetes.io/instance: evroc-ccm
+    app.kubernetes.io/version: "0.1.3"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: evroc
+---
+# Source: evroc-ccm/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: evroc-ccm
+  labels:
+    helm.sh/chart: evroc-ccm-0.1.3
+    app.kubernetes.io/name: evroc-ccm
+    app.kubernetes.io/instance: evroc-ccm
+    app.kubernetes.io/version: "0.1.3"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: evroc
+rules:
+  # Node management (topology labeling, provider ID, addresses)
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "update", "patch"]
+  - apiGroups: [""]
+    resources: ["nodes/status"]
+    verbs: ["patch"]
+  # Events for reporting node updates
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch", "update"]
+  # The controller manager builds a delegated client per controller, which
+  # reads the controller's ServiceAccount and mints a token for it.
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "create"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    verbs: ["create"]
+  # Services for the load balancer controller
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["services/status"]
+    verbs: ["patch", "update"]
+  - apiGroups: [""]
+    resources: ["endpoints"]
+    verbs: ["get", "list", "watch"]
+  # Leader election
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
+---
+# Source: evroc-ccm/templates/rbac.yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: evroc-ccm
+  labels:
+    helm.sh/chart: evroc-ccm-0.1.3
+    app.kubernetes.io/name: evroc-ccm
+    app.kubernetes.io/instance: evroc-ccm
+    app.kubernetes.io/version: "0.1.3"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: evroc
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: evroc-ccm
+subjects:
+  - kind: ServiceAccount
+    name: evroc-ccm
+    namespace: evroc-system
+---
+# Source: evroc-ccm/templates/rbac.yaml
+# The controller manager's delegated authentication reads the
+# extension-apiserver-authentication ConfigMap in kube-system to load the
+# request-header CA. Without this binding the process exits at startup.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: evroc-ccm-authentication-reader
+  namespace: kube-system
+  labels:
+    helm.sh/chart: evroc-ccm-0.1.3
+    app.kubernetes.io/name: evroc-ccm
+    app.kubernetes.io/instance: evroc-ccm
+    app.kubernetes.io/version: "0.1.3"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: evroc
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: evroc-ccm
+    namespace: evroc-system
+---
+# Source: evroc-ccm/templates/deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: evroc-ccm
+  namespace: evroc-system
+  labels:
+    helm.sh/chart: evroc-ccm-0.1.3
+    app.kubernetes.io/name: evroc-ccm
+    app.kubernetes.io/instance: evroc-ccm
+    app.kubernetes.io/version: "0.1.3"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: evroc
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: evroc-ccm
+      app.kubernetes.io/instance: evroc-ccm
+  template:
+    metadata:
+      labels:
+        helm.sh/chart: evroc-ccm-0.1.3
+        app.kubernetes.io/name: evroc-ccm
+        app.kubernetes.io/instance: evroc-ccm
+        app.kubernetes.io/version: "0.1.3"
+        app.kubernetes.io/managed-by: Helm
+        app.kubernetes.io/part-of: evroc
+    spec:
+      serviceAccountName: evroc-ccm
+      priorityClassName: system-cluster-critical
+      # Use the node's network and resolver rather than the cluster's.
+      #
+      # Reaching the evroc API needs DNS, but cluster DNS cannot schedule until
+      # the CCM has removed the uninitialized taint from a node. Depending on
+      # in-cluster DNS therefore deadlocks the bootstrap of a fresh cluster:
+      # the CCM waits for CoreDNS, and CoreDNS waits for the CCM.
+      hostNetwork: true
+      dnsPolicy: Default
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: evroc-ccm
+          image: "ghcr.io/evroc-oss/evroc-ccm-driver:v0.1.3"
+          imagePullPolicy: IfNotPresent
+          args:
+            - --cloud-provider=evroc
+            - --cloud-config=/etc/evroc/config.yaml
+            - --controllers=cloud-node-controller,cloud-node-lifecycle-controller,service-lb-controller
+            - --leader-elect=true
+            - --use-service-account-credentials=true
+            - --v=2
+          resources:
+            limits:
+              cpu: 200m
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: cloud-config
+              mountPath: /etc/evroc
+              readOnly: true
+      volumes:
+        - name: cloud-config
+          secret:
+            secretName: evroc-ccm-config
+      tolerations:
+        # The CCM must tolerate every taint so it can initialize nodes during
+        # cluster bootstrap, before other workloads (including DNS) can run.
+        - operator: Exists
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - preference:
+              matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+            weight: 100

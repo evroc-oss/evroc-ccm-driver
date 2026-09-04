@@ -1,0 +1,33 @@
+{
+  "buildType": "https://github.com/@REPOSITORY@/blob/main/.github/workflows/release.yml@refs/tags/@VERSION@",
+  "builder": {
+    "id": "https://github.com/actions/runner"
+  },
+  "invocation": {
+    "configSource": {
+      "uri": "git+https://github.com/@REPOSITORY@",
+      "digest": {
+        "sha1": "@GIT_SHA@"
+      },
+      "entryPoint": ".github/workflows/release.yml"
+    }
+  },
+  "metadata": {
+    "buildStartedOn": "@BUILD_STARTED_ON@",
+    "buildFinishedOn": "@BUILD_FINISHED_ON@",
+    "completeness": {
+      "parameters": true,
+      "environment": false,
+      "materials": false
+    },
+    "reproducible": false
+  },
+  "materials": [
+    {
+      "uri": "git+https://github.com/@REPOSITORY@",
+      "digest": {
+        "sha1": "@GIT_SHA@"
+      }
+    }
+  ]
+}

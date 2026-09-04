@@ -1,0 +1,86 @@
+# Default values for evroc-ccm.
+
+# evroc Platform Configuration
+evroc:
+  # Name of existing Secret containing config.yaml with evroc credentials.
+  # REQUIRED: You must create this Secret before installing the chart.
+  # The Secret must contain a key named "config.yaml" with the full configuration.
+  #
+  # A CCM-specific Secret is recommended for least privilege. The config schema
+  # is compatible with the evroc CSI driver, but a shared identity gives both
+  # components the union of their IAM permissions.
+  #
+  # Example:
+  #   kubectl create secret generic evroc-ccm-config \
+  #     --namespace evroc-system \
+  #     --from-file=config.yaml=my-config.yaml
+  existingConfigSecret: ""
+
+# CCM Deployment configuration
+ccm:
+  replicas: 1
+
+  image:
+    repository: ghcr.io/evroc-oss/evroc-ccm-driver
+    tag: v0.1.3
+    pullPolicy: IfNotPresent
+
+  # Controllers to enable. Names must match k8s.io/cloud-provider/names.
+  # Available:
+  #   cloud-node-controller            — node topology labeling, provider ID, addresses
+  #   cloud-node-lifecycle-controller  — detect shutdown instances and taint nodes
+  #   service-lb-controller            — reconcile type: LoadBalancer services
+  controllers:
+    - cloud-node-controller
+    - cloud-node-lifecycle-controller
+    - service-lb-controller
+
+  # Kubernetes API verbosity (0-10)
+  verbosity: 2
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  # Prefer control-plane nodes, matching on the label's presence so that both
+  # the kubeadm ("") and k3s/RKE2 ("true") conventions are accepted. This is a
+  # preference rather than a requirement so the CCM can still start on
+  # clusters that do not label their control plane.
+  affinity:
+    nodeAffinity:
+      preferredDuringSchedulingIgnoredDuringExecution:
+        - weight: 100
+          preference:
+            matchExpressions:
+              - key: node-role.kubernetes.io/control-plane
+                operator: Exists
+
+  # Additional environment variables
+  extraEnv: []
+
+  # Additional arguments to the CCM binary
+  extraArgs: []
+
+# RBAC configuration
+rbac:
+  create: true
+
+# Service Account configuration
+serviceAccount:
+  create: true
+  annotations: {}
+  # Override the service account name (auto-generated if empty)
+  name: ""
+
+# Image pull secrets
+imagePullSecrets: []
+
+# Global annotations added to all resources
+annotations: {}
+
+# Global labels added to all resources
+labels: {}

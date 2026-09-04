@@ -1,0 +1,67 @@
+---
+# Example evroc CCM configuration file.
+#
+# The auth, api, and context sections use the same evroc SDK configuration
+# schema as the CSI driver. Each file configures one evroc identity; this
+# example uses the CCM service account below. For least privilege, give the CSI
+# driver its own identity, config file, and Kubernetes Secret. A shared identity
+# bound to both roles also works, but gives both components the combined
+# permissions. The loadbalancers section is CCM-specific.
+#
+# With separate credentials, each component holds only the permissions it
+# needs: bind the CCM identity to kubernetesCCMAgent and the CSI identity to
+# kubernetesCSIAgent.
+#
+# Usage:
+#   1. Create a service account and credential for the CCM:
+#        evroc iam serviceaccount create ccm-agent
+#        evroc iam serviceaccount credential create ccm-agent-key \
+#          --service-account ccm-agent
+#        evroc iam rolebinding assign \
+#          --principal "/iam/projects/<project-id>/serviceAccounts/ccm-agent" \
+#          --role /iam/roles/kubernetesCCMAgent
+#
+#      The credential's private key is printed only once, at creation.
+#
+#   2. Copy this file and fill in your values:
+#        cp deploy/evroc-config-example.yaml my-config.yaml
+#
+#   3. Create the Kubernetes secret:
+#        kubectl create namespace evroc-system
+#        kubectl create secret generic evroc-ccm-config \
+#          --namespace evroc-system \
+#          --from-file=config.yaml=my-config.yaml
+
+auth:
+  # The bare service account name, exactly as passed to
+  # "evroc iam serviceaccount create". Do not append the project: the SDK
+  # derives the OAuth2 client ID as <service_account_id>_<project>, so a
+  # project-qualified value here yields <name>_<project>_<project> and
+  # authentication fails with "invalid_client".
+  service_account_id: "ccm-agent"
+  # The jwt-bearer signing key: a file path or a base64-encoded JWK.
+  service_account_secret: "changeme"
+
+# api:
+#   base_url: "https://api.evroc.com"  # default
+
+context:
+  organization: "my-org"
+  project: "my-project"
+  region: "se-sto"
+
+# Load balancer configuration (optional, CCM-specific).
+# When backendNetwork is set, load balancers are deployed only to the listed
+# zones. Omit it to let the platform apply its default backend network.
+# loadbalancers:
+#   backendNetwork:
+#     vpcID: "vpc-prod"
+#     subnets:
+#       - zone: "a"
+#         subnetID: "subnet-a"
+#       - zone: "b"
+#         subnetID: "subnet-b"
+#   # One of "ipv4-only" (default), "dual-stack", or "ipv6-only".
+#   # Load balancer frontends are always IPv4; "ipv6-only" makes the load
+#   # balancer reach backends over IPv6.
+#   stackType: "ipv4-only"

@@ -1,0 +1,55 @@
+# Example 4: Node Scaling and Backend Reconciliation
+#
+# This example demonstrates how the CCM keeps the LoadBalancer's backend pool
+# in sync as nodes join and leave the cluster.
+#
+# The CCM does NOT decide when to scale — Kubernetes drives that.
+# The CCM reacts to node changes by reconciling the BackendPool.
+#
+# Usage:
+#   kubectl apply -f examples/04-scaling.yaml
+#   kubectl get svc scaling-demo -w                       # wait for EXTERNAL-IP
+#
+#   # Scale the Deployment (pods change, but LB backends are nodes, not pods):
+#   kubectl scale deployment scaling-demo --replicas=10
+#   # Backend pool stays the same — only node changes trigger CCM updates.
+#
+# Scale the cluster's node pool with its provisioning tooling to see the CCM
+# add or remove VM references from the load balancer backend pool.
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scaling-demo
+  namespace: default
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: scaling-demo
+  template:
+    metadata:
+      labels:
+        app: scaling-demo
+    spec:
+      containers:
+        - name: web
+          image: nginx:1.27
+          ports:
+            - containerPort: 80
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scaling-demo
+  namespace: default
+spec:
+  type: LoadBalancer
+  selector:
+    app: scaling-demo
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80

@@ -1,0 +1,84 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "evroc-ccm.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "evroc-ccm.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.ccm.replicas }}
+  selector:
+    matchLabels:
+      {{- include "evroc-ccm.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "evroc-ccm.labels" . | nindent 8 }}
+      {{- with .Values.annotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      serviceAccountName: {{ include "evroc-ccm.serviceAccountName" . }}
+      priorityClassName: system-cluster-critical
+      # Use the node's network and resolver rather than the cluster's.
+      #
+      # Reaching the evroc API needs DNS, but cluster DNS cannot schedule until
+      # the CCM has removed the uninitialized taint from a node. Depending on
+      # in-cluster DNS therefore deadlocks the bootstrap of a fresh cluster:
+      # the CCM waits for CoreDNS, and CoreDNS waits for the CCM.
+      hostNetwork: true
+      dnsPolicy: Default
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: evroc-ccm
+          image: "{{ .Values.ccm.image.repository }}:{{ .Values.ccm.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.ccm.image.pullPolicy }}
+          args:
+            - --cloud-provider=evroc
+            - --cloud-config=/etc/evroc/config.yaml
+            - --controllers={{ join "," .Values.ccm.controllers }}
+            - --leader-elect=true
+            - --use-service-account-credentials=true
+            - --v={{ .Values.ccm.verbosity }}
+            {{- range .Values.ccm.extraArgs }}
+            - {{ . }}
+            {{- end }}
+          {{- with .Values.ccm.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.ccm.resources | nindent 12 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: cloud-config
+              mountPath: /etc/evroc
+              readOnly: true
+      volumes:
+        - name: cloud-config
+          secret:
+            secretName: {{ include "evroc-ccm.configSecretName" . }}
+      tolerations:
+        # The CCM must tolerate every taint so it can initialize nodes during
+        # cluster bootstrap, before other workloads (including DNS) can run.
+        - operator: Exists
+      {{- with .Values.ccm.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

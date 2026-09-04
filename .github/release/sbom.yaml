@@ -1,0 +1,7 @@
+# Syft configuration used by anchore/sbom-action. The workflow selects the
+# SPDX JSON output file; this file keeps the scan behavior discoverable.
+check-for-app-update: false
+scope: squashed
+format:
+  spdx-json:
+    pretty: true
