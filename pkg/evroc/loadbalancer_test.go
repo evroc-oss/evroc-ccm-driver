@@ -408,7 +408,7 @@ func TestEnsurePublicIPErrorsAndRaces(t *testing.T) {
 	})
 }
 
-func TestEnsureLoadBalancerDeletedOwnsOnlyManagedIP(t *testing.T) {
+func TestEnsureLoadBalancerDeletedAlwaysDeletesManagedIP(t *testing.T) {
 	for _, tt := range []struct {
 		name       string
 		annotation *string
@@ -424,8 +424,11 @@ func TestEnsureLoadBalancerDeletedOwnsOnlyManagedIP(t *testing.T) {
 			wantDelete: true,
 		},
 		{
-			name:       "annotated IP is retained",
+			// The annotation may have been added after a managed IP was
+			// allocated; the managed IP must not leak.
+			name:       "annotated service still deletes the managed IP",
 			annotation: ptr("/networking/projects/p/regions/r/publicIPs/static"),
+			wantDelete: true,
 		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

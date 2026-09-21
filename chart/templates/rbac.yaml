@@ -18,14 +18,6 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["create", "patch", "update"]
-  # The controller manager builds a delegated client per controller, which
-  # reads the controller's ServiceAccount and mints a token for it.
-  - apiGroups: [""]
-    resources: ["serviceaccounts"]
-    verbs: ["get", "create"]
-  - apiGroups: [""]
-    resources: ["serviceaccounts/token"]
-    verbs: ["create"]
   # Services for the load balancer controller
   - apiGroups: [""]
     resources: ["services"]
@@ -56,7 +48,49 @@ subjects:
     name: {{ include "evroc-ccm.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
 ---
-# The controller manager's delegated authentication reads the
+# With --use-service-account-credentials the controller manager runs each
+# controller as its own ServiceAccount in kube-system, bound by the API
+# server's bootstrap policy (system:controller:node-controller and
+# system:controller:service-controller). Minting tokens is limited to those
+# two accounts so the CCM cannot obtain a token for any other ServiceAccount.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "evroc-ccm.fullname" . }}-controller-accounts
+  namespace: kube-system
+  labels:
+    {{- include "evroc-ccm.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    resourceNames: ["node-controller", "service-controller"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    resourceNames: ["node-controller", "service-controller"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "evroc-ccm.fullname" . }}-controller-accounts
+  namespace: kube-system
+  labels:
+    {{- include "evroc-ccm.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "evroc-ccm.fullname" . }}-controller-accounts
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "evroc-ccm.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- if .Values.ccm.metrics.enabled }}
+---
+# The metrics endpoint's delegated authentication reads the
 # extension-apiserver-authentication ConfigMap in kube-system to load the
 # request-header CA. Without this binding the process exits at startup.
 apiVersion: rbac.authorization.k8s.io/v1
@@ -74,4 +108,5 @@ subjects:
   - kind: ServiceAccount
     name: {{ include "evroc-ccm.serviceAccountName" . }}
     namespace: {{ .Release.Namespace }}
+{{- end }}
 {{- end }}

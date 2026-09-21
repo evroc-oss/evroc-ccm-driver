@@ -4,14 +4,16 @@
 # The CCM handles everything automatically:
 #
 #   1. You create a Service with type: LoadBalancer
-#   2. CCM allocates a PublicIP in evroc  (default-nginx-ip)
-#   3. CCM waits for the PublicIP to become Ready
-#   4. CCM creates the full LoadBalancer resource stack:
-#        - BackendPool          (default-nginx-pool)         — groups the node VMs
-#        - BackendService       (default-nginx-http-80-svc)  — maps port 80 → NodePort
-#        - L4Route              (default-nginx-http-80-route) — routes listener to backend service
-#        - LoadBalancer          (default-nginx)              — the L4 LB with a TCP listener on port 80
-#   5. CCM reads the allocated IP and writes it back to Service.status.loadBalancer.ingress
+#   2. CCM derives a stable name from the Service UID: ccm-<24 hex chars>,
+#      referred to as <lb> below. The name is logged by the CCM as "name".
+#   3. CCM allocates a PublicIP in evroc  (<lb>-ip)
+#   4. CCM waits for the PublicIP to become Ready
+#   5. CCM creates the full LoadBalancer resource stack:
+#        - BackendPool          (<lb>-pool)           — groups the node VMs
+#        - BackendService       (<lb>-http-80-svc)    — maps port 80 → NodePort
+#        - L4Route              (<lb>-http-80-route)  — routes listener to backend service
+#        - LoadBalancer         (<lb>)                — the L4 LB with a TCP listener on port 80
+#   6. CCM reads the allocated IP and writes it back to Service.status.loadBalancer.ingress
 #
 # Traffic flow:
 #   Client :80 → PublicIP → LoadBalancer :80 → Node :30080 (NodePort) → kube-proxy → Pod :80

@@ -22,7 +22,7 @@ ccm:
 
   image:
     repository: ghcr.io/evroc-oss/evroc-ccm-driver
-    tag: v0.1.3
+    tag: v0.2.0
     pullPolicy: IfNotPresent
 
   # Controllers to enable. Names must match k8s.io/cloud-provider/names.
@@ -37,6 +37,14 @@ ccm:
 
   # Kubernetes API verbosity (0-10)
   verbosity: 2
+
+  # Metrics and health endpoint. The CCM runs on the host network, so when
+  # enabled the endpoint listens on this port of the node it runs on. It is
+  # authenticated with the cluster's request-header CA and needs the
+  # kube-system authentication-reader RoleBinding, rendered only when enabled.
+  metrics:
+    enabled: false
+    port: 10258
 
   resources:
     requests:

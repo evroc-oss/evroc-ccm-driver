@@ -6,10 +6,10 @@ metadata:
   name: evroc-ccm
   namespace: evroc-system
   labels:
-    helm.sh/chart: evroc-ccm-0.1.3
+    helm.sh/chart: evroc-ccm-0.2.0
     app.kubernetes.io/name: evroc-ccm
     app.kubernetes.io/instance: evroc-ccm
-    app.kubernetes.io/version: "0.1.3"
+    app.kubernetes.io/version: "0.2.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: evroc
 ---
@@ -19,10 +19,10 @@ kind: ClusterRole
 metadata:
   name: evroc-ccm
   labels:
-    helm.sh/chart: evroc-ccm-0.1.3
+    helm.sh/chart: evroc-ccm-0.2.0
     app.kubernetes.io/name: evroc-ccm
     app.kubernetes.io/instance: evroc-ccm
-    app.kubernetes.io/version: "0.1.3"
+    app.kubernetes.io/version: "0.2.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: evroc
 rules:
@@ -37,14 +37,6 @@ rules:
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["create", "patch", "update"]
-  # The controller manager builds a delegated client per controller, which
-  # reads the controller's ServiceAccount and mints a token for it.
-  - apiGroups: [""]
-    resources: ["serviceaccounts"]
-    verbs: ["get", "create"]
-  - apiGroups: [""]
-    resources: ["serviceaccounts/token"]
-    verbs: ["create"]
   # Services for the load balancer controller
   - apiGroups: [""]
     resources: ["services"]
@@ -66,10 +58,10 @@ kind: ClusterRoleBinding
 metadata:
   name: evroc-ccm
   labels:
-    helm.sh/chart: evroc-ccm-0.1.3
+    helm.sh/chart: evroc-ccm-0.2.0
     app.kubernetes.io/name: evroc-ccm
     app.kubernetes.io/instance: evroc-ccm
-    app.kubernetes.io/version: "0.1.3"
+    app.kubernetes.io/version: "0.2.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: evroc
 roleRef:
@@ -82,25 +74,53 @@ subjects:
     namespace: evroc-system
 ---
 # Source: evroc-ccm/templates/rbac.yaml
-# The controller manager's delegated authentication reads the
-# extension-apiserver-authentication ConfigMap in kube-system to load the
-# request-header CA. Without this binding the process exits at startup.
+# With --use-service-account-credentials the controller manager runs each
+# controller as its own ServiceAccount in kube-system, bound by the API
+# server's bootstrap policy (system:controller:node-controller and
+# system:controller:service-controller). Minting tokens is limited to those
+# two accounts so the CCM cannot obtain a token for any other ServiceAccount.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: evroc-ccm-controller-accounts
+  namespace: kube-system
+  labels:
+    helm.sh/chart: evroc-ccm-0.2.0
+    app.kubernetes.io/name: evroc-ccm
+    app.kubernetes.io/instance: evroc-ccm
+    app.kubernetes.io/version: "0.2.0"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: evroc
+rules:
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    resourceNames: ["node-controller", "service-controller"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts/token"]
+    resourceNames: ["node-controller", "service-controller"]
+    verbs: ["create"]
+---
+# Source: evroc-ccm/templates/rbac.yaml
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: evroc-ccm-authentication-reader
+  name: evroc-ccm-controller-accounts
   namespace: kube-system
   labels:
-    helm.sh/chart: evroc-ccm-0.1.3
+    helm.sh/chart: evroc-ccm-0.2.0
     app.kubernetes.io/name: evroc-ccm
     app.kubernetes.io/instance: evroc-ccm
-    app.kubernetes.io/version: "0.1.3"
+    app.kubernetes.io/version: "0.2.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: evroc
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: extension-apiserver-authentication-reader
+  name: evroc-ccm-controller-accounts
 subjects:
   - kind: ServiceAccount
     name: evroc-ccm
@@ -113,10 +133,10 @@ metadata:
   name: evroc-ccm
   namespace: evroc-system
   labels:
-    helm.sh/chart: evroc-ccm-0.1.3
+    helm.sh/chart: evroc-ccm-0.2.0
     app.kubernetes.io/name: evroc-ccm
     app.kubernetes.io/instance: evroc-ccm
-    app.kubernetes.io/version: "0.1.3"
+    app.kubernetes.io/version: "0.2.0"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: evroc
 spec:
@@ -128,10 +148,10 @@ spec:
   template:
     metadata:
       labels:
-        helm.sh/chart: evroc-ccm-0.1.3
+        helm.sh/chart: evroc-ccm-0.2.0
         app.kubernetes.io/name: evroc-ccm
         app.kubernetes.io/instance: evroc-ccm
-        app.kubernetes.io/version: "0.1.3"
+        app.kubernetes.io/version: "0.2.0"
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: evroc
     spec:
@@ -153,7 +173,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: evroc-ccm
-          image: "ghcr.io/evroc-oss/evroc-ccm-driver:v0.1.3"
+          image: "ghcr.io/evroc-oss/evroc-ccm-driver:v0.2.0"
           imagePullPolicy: IfNotPresent
           args:
             - --cloud-provider=evroc
@@ -161,6 +181,7 @@ spec:
             - --controllers=cloud-node-controller,cloud-node-lifecycle-controller,service-lb-controller
             - --leader-elect=true
             - --use-service-account-credentials=true
+            - --secure-port=0
             - --v=2
           resources:
             limits:
