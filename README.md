@@ -9,6 +9,27 @@
 
 Kubernetes [Cloud Controller Manager](https://kubernetes.io/docs/concepts/architecture/cloud-controller/) (CCM) for the [evroc](https://evroc.com) cloud platform.
 
+## Table of Contents
+
+- [Features](#features)
+- [Load balancers](#load-balancers)
+  - [Annotations](#annotations)
+  - [Network prerequisites](#network-prerequisites)
+  - [Unsupported service fields](#unsupported-service-fields)
+- [Requirements](#requirements)
+- [Configuration](#configuration)
+  - [Creating credentials](#creating-credentials)
+  - [Credential isolation from the CSI driver](#credential-isolation-from-the-csi-driver)
+- [Security considerations](#security-considerations)
+- [Deployment](#deployment)
+  - [Helm (recommended)](#helm-recommended)
+  - [Static manifests](#static-manifests)
+  - [Important](#important)
+- [Development](#development)
+  - [Prerequisites](#prerequisites)
+- [License](#license)
+- [Support](#support)
+
 ## Features
 
 | Feature | Status |
@@ -87,6 +108,8 @@ service never appears healthy while behaving differently from what it asked for:
 - Go 1.25+
 - Kubernetes 1.29+
 - evroc credentials with compute, loadbalancer, and networking access
+- **Kubernetes node names must equal the evroc VM names.** The CCM looks VMs
+  up by node name for node initialization and for load balancer backends.
 - **Kubelets must run with `--cloud-provider=external`.** Otherwise the
   distribution's own cloud controller initializes nodes first and the CCM is
   never consulted. On k3s and RKE2, set `disable-cloud-controller: true` and
@@ -107,6 +130,8 @@ auth:
   # The bare service account name — the SDK derives the OAuth2 client ID as
   # <service_account_id>_<project>, so do not append the project here.
   service_account_id: "ccm-agent"
+  # The credential's private key from `evroc iam serviceaccount credential
+  # create`, as a base64-encoded JWK or a path to a file containing it.
   service_account_secret: "changeme"
 
 context:
@@ -150,6 +175,26 @@ used by both components, with the tradeoff that each receives the union of
 their permissions. Kubernetes ServiceAccounts control Kubernetes RBAC and are
 distinct from the evroc identities in the `auth` sections.
 
+## Security considerations
+
+- **Credentials.** Use a service account bound to `kubernetesCCMAgent`. The
+  config also accepts `auth.refresh_token`, which authenticates as the user who
+  issued it with all of that user's permissions; it is meant for development
+  only and should never be deployed to a cluster.
+- **Who can create load balancers.** Any user allowed to create a
+  `type: LoadBalancer` service consumes a public IP and a load balancer in the
+  evroc project. Cap this per namespace with a `ResourceQuota` on
+  `services.loadbalancers`.
+- **The `ccm.evroc.com/public-ip-ref` annotation.** The CCM only checks that
+  the referenced IP exists, so anyone who can set it can attach any public IP
+  in the project, including one reserved for another service. In a
+  multi-tenant cluster, restrict the annotation with an admission policy.
+- **Metrics.** The metrics and health endpoint is off by default. The CCM
+  runs on the host network, so enabling it with `ccm.metrics.enabled=true`
+  exposes the authenticated endpoint on port `ccm.metrics.port` of the node.
+- **Node ports.** Open the node-port range only to the VPC or backend subnet
+  CIDRs, as described under [network prerequisites](#network-prerequisites).
+
 ## Deployment
 
 ### Helm (recommended)
@@ -173,6 +218,7 @@ kubectl create secret generic evroc-ccm-config \
 
 ```bash
 helm install evroc-ccm oci://ghcr.io/evroc-oss/charts/evroc-ccm \
+  --version 0.2.0 \
   --namespace evroc-system \
   --set evroc.existingConfigSecret=evroc-ccm-config
 ```

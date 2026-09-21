@@ -4,16 +4,17 @@
 # The CCM creates one BackendService + L4Route per port, but they all share
 # the same BackendPool (same set of nodes).
 #
-# Resources created by the CCM:
-#   - PublicIP              (default-myapp-ip)
-#   - BackendPool           (default-myapp-pool)              — shared across all listeners
-#   - BackendService        (default-myapp-http-80-svc)       — port 80 → NodePort 1
-#   - BackendService        (default-myapp-https-443-svc)     — port 443 → NodePort 2
-#   - BackendService        (default-myapp-metrics-9090-svc)  — port 9090 → NodePort 3
-#   - L4Route               (default-myapp-http-80-route)
-#   - L4Route               (default-myapp-https-443-route)
-#   - L4Route               (default-myapp-metrics-9090-route)
-#   - LoadBalancer           (default-myapp)                   — 3 TCP listeners
+# Resources created by the CCM, where <lb> is ccm-<24 hex chars> derived from
+# the Service UID (see examples/01-basic-loadbalancer.yaml):
+#   - PublicIP              (<lb>-ip)
+#   - BackendPool           (<lb>-pool)               — shared across all listeners
+#   - BackendService        (<lb>-http-80-svc)        — port 80 → NodePort 1
+#   - BackendService        (<lb>-https-443-svc)      — port 443 → NodePort 2
+#   - BackendService        (<lb>-metrics-9090-svc)   — port 9090 → NodePort 3
+#   - L4Route               (<lb>-http-80-route)
+#   - L4Route               (<lb>-https-443-route)
+#   - L4Route               (<lb>-metrics-9090-route)
+#   - LoadBalancer          (<lb>)                    — 3 TCP listeners
 #
 # Traffic flow (per port):
 #   Client :80  → LB :80  → Node :31080 → Pod :8080
@@ -41,8 +42,11 @@ spec:
         app: myapp
     spec:
       containers:
+        # agnhost's netexec serves HTTP on every port it is given, so all three
+        # listeners can be exercised without a custom image.
         - name: app
-          image: myapp:latest
+          image: registry.k8s.io/e2e-test-images/agnhost:2.53
+          args: ["netexec", "--http-port=8080"]
           ports:
             - name: http
               containerPort: 8080

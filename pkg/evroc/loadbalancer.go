@@ -162,11 +162,13 @@ func (lb *loadBalancer) EnsureLoadBalancerDeleted(ctx context.Context, clusterNa
 		return fmt.Errorf("failed to delete load balancer %q: %w", lbName, err)
 	}
 
-	if strings.TrimSpace(service.Annotations[annotationPublicIPRef]) == "" {
-		ipName := lb.publicIPName(lbName)
-		if err := lb.ips.Delete(ctx, ipName); err != nil && !errors.Is(err, evroc.ErrNotFound) {
-			return fmt.Errorf("failed to delete public IP %q: %w", ipName, err)
-		}
+	// The managed IP has a name only the CCM allocates, so it is deleted even
+	// when the service now carries an annotated IP: the annotation may have
+	// been added after the managed IP was allocated, and skipping the delete
+	// would leak it. The annotated IP is never touched.
+	ipName := lb.publicIPName(lbName)
+	if err := lb.ips.Delete(ctx, ipName); err != nil && !errors.Is(err, evroc.ErrNotFound) {
+		return fmt.Errorf("failed to delete public IP %q: %w", ipName, err)
 	}
 
 	lb.logger.Info("load balancer deleted", "name", lbName)

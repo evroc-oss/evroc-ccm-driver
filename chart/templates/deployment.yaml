@@ -42,7 +42,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: evroc-ccm
-          image: "{{ .Values.ccm.image.repository }}:{{ .Values.ccm.image.tag | default .Chart.AppVersion }}"
+          image: "{{ .Values.ccm.image.repository }}:{{ .Values.ccm.image.tag | default (printf "v%s" .Chart.AppVersion) }}"
           imagePullPolicy: {{ .Values.ccm.image.pullPolicy }}
           args:
             - --cloud-provider=evroc
@@ -50,6 +50,7 @@ spec:
             - --controllers={{ join "," .Values.ccm.controllers }}
             - --leader-elect=true
             - --use-service-account-credentials=true
+            - --secure-port={{ if .Values.ccm.metrics.enabled }}{{ .Values.ccm.metrics.port }}{{ else }}0{{ end }}
             - --v={{ .Values.ccm.verbosity }}
             {{- range .Values.ccm.extraArgs }}
             - {{ . }}

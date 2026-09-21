@@ -2,8 +2,8 @@ apiVersion: v2
 name: evroc-ccm
 description: Kubernetes Cloud Controller Manager for the evroc cloud platform
 type: application
-version: 0.1.3
-appVersion: "0.1.3"
+version: 0.2.0
+appVersion: "0.2.0"
 keywords:
   - cloud-controller-manager
   - ccm
