@@ -73,12 +73,15 @@ loadbalancers:
   stackType: ipv6-only
 csi:
   storageClass: evroc-block
+ccm:
+  identifier: cluster-a
 `)
 		got, err := ParseBytes(data)
 		if err != nil {
 			t.Fatalf("ParseBytes() error = %v", err)
 		}
-		if got.API.BaseURL != "https://custom-api.evroc.com" ||
+		if got.CCM.Identifier != "cluster-a" ||
+			got.API.BaseURL != "https://custom-api.evroc.com" ||
 			got.Auth.TokenURL != "http://localhost:8080/token" ||
 			got.LoadBalancers.BackendNetwork == nil ||
 			got.LoadBalancers.BackendNetwork.VPCID != "vpc-prod" ||
@@ -424,5 +427,36 @@ func TestDeployExampleParses(t *testing.T) {
 	}
 	if cfg.Auth.ServiceAccountID == "" || cfg.Auth.ServiceAccountSecret == "" {
 		t.Error("example config must set both service-account credential fields")
+	}
+}
+
+func TestCCMIdentifier(t *testing.T) {
+	for _, id := range []string{"", "cluster-a", "cluster_b", "A1", "x", "bad/id", "space here", "-leading", "trailing-", strings.Repeat("a", 64)} {
+		t.Run(id, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.CCM.Identifier = id
+			wantErr := strings.ContainsAny(id, "/ ") || strings.HasPrefix(id, "-") || strings.HasSuffix(id, "-") || len(id) > 63
+			if err := cfg.Validate(); (err != nil) != wantErr {
+				t.Fatalf("Validate() = %v, want error %v", err, wantErr)
+			}
+		})
+	}
+}
+
+func TestCCMIdentifierDefaultsToProject(t *testing.T) {
+	for _, explicit := range []string{"", "cluster-a"} {
+		data := minimalYAML
+		want := "my-project"
+		if explicit != "" {
+			data += "\nccm:\n  identifier: " + explicit + "\n"
+			want = explicit
+		}
+		cfg, err := ParseBytes([]byte(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := cfg.CCMIdentifier(); got != want {
+			t.Fatalf("CCMIdentifier() = %q, want %q", got, want)
+		}
 	}
 }

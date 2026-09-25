@@ -43,10 +43,26 @@ const (
 // The CCM identity binds kubernetesCCMAgent; the CSI identity binds
 // kubernetesCSIAgent.
 type Config struct {
+	CCM           CCMConfig          `json:"ccm,omitempty" yaml:"ccm,omitempty"`
 	Auth          AuthConfig         `json:"auth" yaml:"auth"`
 	API           APIConfig          `json:"api" yaml:"api,omitempty"`
 	Context       ContextConfig      `json:"context" yaml:"context"`
 	LoadBalancers LoadBalancerConfig `json:"loadbalancers" yaml:"loadbalancers,omitempty"`
+}
+
+// CCMConfig controls resource ownership for this installation.
+type CCMConfig struct {
+	// Identifier scopes ownership of managed cloud resources to this installation.
+	// When omitted, the project name is used, matching the CSI driver.
+	Identifier string `json:"identifier,omitempty" yaml:"identifier,omitempty"`
+}
+
+// CCMIdentifier returns the installation identifier, defaulting to the project.
+func (c *Config) CCMIdentifier() string {
+	if c.CCM.Identifier != "" {
+		return c.CCM.Identifier
+	}
+	return c.Context.Project
 }
 
 // AuthConfig holds the service account credentials used for jwt-bearer
@@ -182,6 +198,9 @@ func (c *Config) SDKConfig() sdkconfig.Config {
 
 // Validate checks all required fields are present and valid.
 func (c *Config) Validate() error {
+	if id := c.CCM.Identifier; id != "" && (len(id) > 63 || !validCCMIdentifierRe.MatchString(id)) {
+		return fmt.Errorf("ccm.identifier must be 1-63 alphanumeric characters, hyphens, or underscores, starting and ending with an alphanumeric character")
+	}
 	// Either a service account or a refresh token, but a service account is
 	// what production deployments should use.
 	if c.Auth.RefreshToken == "" {
@@ -319,6 +338,8 @@ func validateURL(urlStr, fieldName string) error {
 	}
 	return nil
 }
+
+var validCCMIdentifierRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9_-]*[a-zA-Z0-9])?$`)
 
 var validIdentifierRe = regexp.MustCompile(`^[a-zA-Z0-9-]+$`)
 

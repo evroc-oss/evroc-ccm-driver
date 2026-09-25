@@ -37,6 +37,7 @@ type lbClient interface {
 	WaitForReady(ctx context.Context, name string, timeout time.Duration) (*lbtypes.Loadbalancer, error)
 	Delete(ctx context.Context, lbName string, listenerNames []string) error
 	GetLB(ctx context.Context, name string) (*lbtypes.Loadbalancer, error)
+	HasDependents(ctx context.Context, name string) (bool, error)
 }
 
 // publicIPService abstracts PublicIP operations for testability.
@@ -57,7 +58,7 @@ type loadBalancer struct {
 
 func newLoadBalancer(lbCl *loadbalancer.Client, netCl *evroc.Client, cfg *ccmconfig.Config, logger *slog.Logger) *loadBalancer {
 	return &loadBalancer{
-		lb:     &sdkLBClient{client: lbCl},
+		lb:     &sdkLBClient{client: lbCl, owner: resourceOwner(cfg.CCMIdentifier())},
 		ips:    netCl.Networking().PublicIPs(),
 		config: cfg,
 		logger: logger.With("subsystem", "loadbalancer"),
@@ -66,10 +67,12 @@ func newLoadBalancer(lbCl *loadbalancer.Client, netCl *evroc.Client, cfg *ccmcon
 
 // sdkLBClient wraps loadbalancer.Client to satisfy the lbClient interface.
 type sdkLBClient struct {
+	owner  resourceOwner
 	client *loadbalancer.Client
 }
 
 func (s *sdkLBClient) Ensure(ctx context.Context, opts lbEnsureOptions) (*lbtypes.Loadbalancer, error) {
+	opts.Owner = s.owner
 	return lbEnsure(ctx, s.client, opts)
 }
 
@@ -78,11 +81,22 @@ func (s *sdkLBClient) WaitForReady(ctx context.Context, name string, timeout tim
 }
 
 func (s *sdkLBClient) Delete(ctx context.Context, lbName string, listenerNames []string) error {
-	return lbCleanup(ctx, s.client, lbName, listenerNames)
+	return lbCleanup(ctx, s.client, lbName, listenerNames, s.owner)
 }
 
 func (s *sdkLBClient) GetLB(ctx context.Context, name string) (*lbtypes.Loadbalancer, error) {
-	return s.client.LoadBalancers().Get(ctx, name)
+	r, err := s.client.LoadBalancers().Get(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.owner.check(name, resourceLabels(r.Metadata.UserLabels)); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+func (s *sdkLBClient) HasDependents(ctx context.Context, name string) (bool, error) {
+	return lbHasDependents(ctx, s.client, name, s.owner)
 }
 
 // GetLoadBalancer returns the load balancer status for the given service.
@@ -93,8 +107,10 @@ func (lb *loadBalancer) GetLoadBalancer(ctx context.Context, clusterName string,
 	evrocLB, err := lb.lb.GetLB(ctx, lbName)
 	if err != nil {
 		if errors.Is(err, evroc.ErrNotFound) {
-			lb.logger.Info("load balancer not found", "name", lbName)
-			return nil, false, nil
+			// The service controller skips cleanup and removes its finalizer when
+			// exists is false. A missing frontend must not hide a partial stack.
+			exists, err := lb.hasManagedDependents(ctx, lbName)
+			return &v1.LoadBalancerStatus{}, exists, err
 		}
 		return nil, false, fmt.Errorf("failed to get load balancer %q: %w", lbName, err)
 	}
@@ -167,12 +183,35 @@ func (lb *loadBalancer) EnsureLoadBalancerDeleted(ctx context.Context, clusterNa
 	// been added after the managed IP was allocated, and skipping the delete
 	// would leak it. The annotated IP is never touched.
 	ipName := lb.publicIPName(lbName)
-	if err := lb.ips.Delete(ctx, ipName); err != nil && !errors.Is(err, evroc.ErrNotFound) {
+	if err := lb.deleteManagedIP(ctx, ipName); err != nil && !errors.Is(err, evroc.ErrNotFound) {
 		return fmt.Errorf("failed to delete public IP %q: %w", ipName, err)
+	}
+
+	// Cloud deletes are asynchronous. Keep the Service finalizer until the
+	// entire stack is absent, and let the service controller retry meanwhile.
+	if _, exists, err := lb.GetLoadBalancer(ctx, clusterName, service); err != nil {
+		return fmt.Errorf("failed to verify load balancer deletion: %w", err)
+	} else if exists {
+		return fmt.Errorf("load balancer %q resources are still deleting", lbName)
 	}
 
 	lb.logger.Info("load balancer deleted", "name", lbName)
 	return nil
+}
+
+func (lb *loadBalancer) hasManagedDependents(ctx context.Context, name string) (bool, error) {
+	if exists, err := lb.lb.HasDependents(ctx, name); err != nil || exists {
+		return exists, err
+	}
+	// Only inspect the deterministic managed IP, never an annotated external IP.
+	ip, err := lb.ips.Get(ctx, lb.publicIPName(name))
+	if errors.Is(err, evroc.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("failed to check managed public IP: %w", err)
+	}
+	return true, lb.checkManagedIP(ip)
 }
 
 // ensureLoadBalancer resolves the PublicIP and declaratively reconciles the LB,
@@ -242,14 +281,17 @@ func (lb *loadBalancer) ensurePublicIP(ctx context.Context, lbName string, servi
 	// on a later step. Treating that as an error would wedge the service
 	// permanently: every retry would fail with AlreadyExists and the load
 	// balancer would never be created.
-	_, err := lb.ips.Get(ctx, ipName)
+	existing, err := lb.ips.Get(ctx, ipName)
 	if err == nil {
+		if err := lb.checkManagedIP(existing); err != nil {
+			return "", err
+		}
 		lb.logger.Info("reusing public IP from an earlier attempt", "name", ipName)
 	} else if errors.Is(err, evroc.ErrNotFound) {
 		lb.logger.Info("allocating public IP", "name", ipName)
 
 		// The SDK builder supplies the request's required API metadata.
-		if _, err := lb.ips.Create(ctx, newPublicIPRequest(ipName)); err != nil && !errors.Is(err, evroc.ErrConflict) {
+		if _, err := lb.ips.Create(ctx, newPublicIPRequest(ipName, resourceOwner(lb.config.CCMIdentifier()))); err != nil && !errors.Is(err, evroc.ErrConflict) {
 			return "", fmt.Errorf("failed to create public IP: %w", err)
 		}
 	} else {
@@ -264,6 +306,9 @@ func (lb *loadBalancer) ensurePublicIP(ctx context.Context, lbName string, servi
 		return "", fmt.Errorf("public IP %q became ready without a resource reference", ipName)
 	}
 
+	if err := lb.checkManagedIP(ip); err != nil {
+		return "", err
+	}
 	return string(ip.Ref()), nil
 }
 
@@ -347,6 +392,24 @@ func toLBStatus(evrocLB *lbtypes.Loadbalancer) *v1.LoadBalancerStatus {
 // frontend addresses. PublicIP only supports IPv4 today. When the API and SDK
 // expose an address-family selector, apply the Service's requested family here
 // rather than coupling it to the backend stack type.
-func newPublicIPRequest(name string) *networkingtypes.PublicIPRequest {
-	return networking.NewPublicIPBuilder(name).Build()
+func newPublicIPRequest(name string, owner resourceOwner) *networkingtypes.PublicIPRequest {
+	return networking.NewPublicIPBuilder(name).WithLabels(owner.labels()).Build()
+}
+
+func (lb *loadBalancer) checkManagedIP(ip *networkingtypes.PublicIP) error {
+	if ip == nil {
+		return fmt.Errorf("managed public IP lookup returned no resource")
+	}
+	return resourceOwner(lb.config.CCMIdentifier()).check(ip.Metadata.Id, resourceLabels(ip.Metadata.UserLabels))
+}
+
+func (lb *loadBalancer) deleteManagedIP(ctx context.Context, name string) error {
+	ip, err := lb.ips.Get(ctx, name)
+	if err != nil {
+		return err
+	}
+	if err := lb.checkManagedIP(ip); err != nil {
+		return err
+	}
+	return lb.ips.Delete(ctx, name)
 }

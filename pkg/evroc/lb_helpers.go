@@ -37,6 +37,7 @@ type listenerInput struct {
 // lbEnsureOptions carries everything needed to reconcile the load balancer
 // and its sub-resources.
 type lbEnsureOptions struct {
+	Owner       resourceOwner
 	Name        string
 	PublicIPRef string
 	Listeners   []listenerInput
@@ -60,11 +61,16 @@ type lbEnsureOptions struct {
 func lbEnsure(ctx context.Context, client *loadbalancer.Client, opts lbEnsureOptions) (*lbtypes.Loadbalancer, error) {
 	lbName := opts.Name
 	poolName := lbPoolName(lbName)
+	owner := opts.Owner
 
 	_, err := loadbalancer.NewBackendPoolBuilder(poolName).
+		WithLabels(opts.Owner.labels()).
 		WithBackendRefs(opts.BackendRefs).
 		Create(ctx, client.BackendPools())
 	if errors.Is(err, evroc.ErrConflict) {
+		if err := owner.checkLB(ctx, client, "backendPool", poolName); err != nil {
+			return nil, err
+		}
 		_, err = client.BackendPools().Patch(ctx, poolName, map[string]any{
 			"spec": map[string]any{"backendRefs": opts.BackendRefs},
 		})
@@ -77,6 +83,7 @@ func lbEnsure(ctx context.Context, client *loadbalancer.Client, opts lbEnsureOpt
 	for _, l := range opts.Listeners {
 		svcName := lbBackendServiceName(lbName, l.Name)
 		svcReq := loadbalancer.NewBackendServiceBuilder(svcName).
+			WithLabels(opts.Owner.labels()).
 			WithPort(l.BackendPort).
 			WithBackendPoolRef(client.BackendPoolRef(poolName)).
 			WithTCPHealthCheck().
@@ -91,6 +98,9 @@ func lbEnsure(ctx context.Context, client *loadbalancer.Client, opts lbEnsureOpt
 		}
 		_, err := client.BackendServices().Create(ctx, svcReq)
 		if errors.Is(err, evroc.ErrConflict) {
+			if err := owner.checkLB(ctx, client, "backendService", svcName); err != nil {
+				return nil, err
+			}
 			_, err = client.BackendServices().Patch(ctx, svcName, map[string]any{
 				"spec": map[string]any{
 					"backendPoolRef":      svcReq.Spec.BackendPoolRef,
@@ -107,10 +117,14 @@ func lbEnsure(ctx context.Context, client *loadbalancer.Client, opts lbEnsureOpt
 
 		routeName := lbRouteName(lbName, l.Name)
 		routeReq := loadbalancer.NewL4RouteBuilder(routeName).
+			WithLabels(opts.Owner.labels()).
 			WithBackendServiceRef(client.BackendServiceRef(svcName)).
 			Build()
 		_, err = client.L4Routes().Create(ctx, routeReq)
 		if errors.Is(err, evroc.ErrConflict) {
+			if err := owner.checkLB(ctx, client, "l4Route", routeName); err != nil {
+				return nil, err
+			}
 			_, err = client.L4Routes().Patch(ctx, routeName, map[string]any{
 				"spec": routeReq.Spec,
 			})
@@ -130,6 +144,7 @@ func lbEnsure(ctx context.Context, client *loadbalancer.Client, opts lbEnsureOpt
 	}
 
 	builder := loadbalancer.NewLoadBalancerBuilder(lbName).
+		WithLabels(opts.Owner.labels()).
 		WithPublicIPRef(opts.PublicIPRef)
 	for _, l := range lbListeners {
 		builder = builder.WithListener(l)
@@ -143,6 +158,9 @@ func lbEnsure(ctx context.Context, client *loadbalancer.Client, opts lbEnsureOpt
 	}
 	created, err := client.LoadBalancers().Create(ctx, lbReq)
 	if errors.Is(err, evroc.ErrConflict) {
+		if err := owner.checkLB(ctx, client, "loadBalancer", lbName); err != nil {
+			return nil, err
+		}
 		// backendNetwork is immutable and may only be set by the create above.
 		created, err = client.LoadBalancers().Patch(ctx, lbName, map[string]any{
 			"spec": map[string]any{
@@ -157,7 +175,7 @@ func lbEnsure(ctx context.Context, client *loadbalancer.Client, opts lbEnsureOpt
 
 	// Returning a cleanup error makes the Kubernetes service controller retry
 	// the full, idempotent reconciliation, including stale-resource discovery.
-	if err := lbDeleteStaleListeners(ctx, client, lbName, opts.Listeners); err != nil {
+	if err := lbDeleteStaleListeners(ctx, client, lbName, opts.Listeners, opts.Owner); err != nil {
 		return nil, err
 	}
 	return created, nil
@@ -165,7 +183,7 @@ func lbEnsure(ctx context.Context, client *loadbalancer.Client, opts lbEnsureOpt
 
 // lbDeleteStaleListeners removes resources left by deleted or renamed Service
 // ports. Discovery also catches resources from a partially completed reconcile.
-func lbDeleteStaleListeners(ctx context.Context, client *loadbalancer.Client, lbName string, listeners []listenerInput) error {
+func lbDeleteStaleListeners(ctx context.Context, client *loadbalancer.Client, lbName string, listeners []listenerInput, owner resourceOwner) error {
 	desiredRoutes := make(map[string]bool, len(listeners))
 	desiredServices := make(map[string]bool, len(listeners))
 	for _, listener := range listeners {
@@ -174,28 +192,28 @@ func lbDeleteStaleListeners(ctx context.Context, client *loadbalancer.Client, lb
 	}
 
 	var errs []error
-	routes, err := client.L4Routes().List(ctx)
+	routes, err := client.L4Routes().List(ctx, owner)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("failed to list L4 routes: %w", err))
 	} else {
 		for _, route := range routes.Items {
 			name := route.Metadata.Id
 			if isOwnedListenerResource(name, lbName, "-route") && !desiredRoutes[name] {
-				if err := client.L4Routes().Delete(ctx, name); err != nil && !errors.Is(err, evroc.ErrNotFound) {
+				if err := owner.deleteLB(ctx, client, "l4Route", name); err != nil && !errors.Is(err, evroc.ErrNotFound) {
 					errs = append(errs, fmt.Errorf("failed to delete stale L4 route %q: %w", name, err))
 				}
 			}
 		}
 	}
 
-	services, err := client.BackendServices().List(ctx)
+	services, err := client.BackendServices().List(ctx, owner)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("failed to list backend services: %w", err))
 	} else {
 		for _, service := range services.Items {
 			name := service.Metadata.Id
 			if isOwnedListenerResource(name, lbName, "-svc") && !desiredServices[name] {
-				if err := client.BackendServices().Delete(ctx, name); err != nil && !errors.Is(err, evroc.ErrNotFound) {
+				if err := owner.deleteLB(ctx, client, "backendService", name); err != nil && !errors.Is(err, evroc.ErrNotFound) {
 					errs = append(errs, fmt.Errorf("failed to delete stale backend service %q: %w", name, err))
 				}
 			}
@@ -206,6 +224,35 @@ func lbDeleteStaleListeners(ctx context.Context, client *loadbalancer.Client, lb
 
 func isOwnedListenerResource(name, lbName, suffix string) bool {
 	return strings.HasPrefix(name, lbName+"-") && strings.HasSuffix(name, suffix)
+}
+
+// lbHasDependents also discovers listeners removed from the Service spec.
+// Any discovery error must prevent the caller from declaring cleanup complete.
+func lbHasDependents(ctx context.Context, client *loadbalancer.Client, name string, owner resourceOwner) (bool, error) {
+	if pool, err := client.BackendPools().Get(ctx, lbPoolName(name)); err == nil {
+		return true, owner.check(pool.Metadata.Id, resourceLabels(pool.Metadata.UserLabels))
+	} else if !errors.Is(err, evroc.ErrNotFound) {
+		return false, fmt.Errorf("failed to check backend pool: %w", err)
+	}
+	routes, err := client.L4Routes().List(ctx, owner)
+	if err != nil {
+		return false, fmt.Errorf("failed to discover L4 routes: %w", err)
+	}
+	for _, route := range routes.Items {
+		if isOwnedListenerResource(route.Metadata.Id, name, "-route") {
+			return true, owner.check(route.Metadata.Id, resourceLabels(route.Metadata.UserLabels))
+		}
+	}
+	services, err := client.BackendServices().List(ctx, owner)
+	if err != nil {
+		return false, fmt.Errorf("failed to discover backend services: %w", err)
+	}
+	for _, service := range services.Items {
+		if isOwnedListenerResource(service.Metadata.Id, name, "-svc") {
+			return true, owner.check(service.Metadata.Id, resourceLabels(service.Metadata.UserLabels))
+		}
+	}
+	return false, nil
 }
 
 // lbCleanup tears down the load balancer and discovers and removes all of its
@@ -223,7 +270,7 @@ func isOwnedListenerResource(name, lbName, suffix string) bool {
 // listenerNames are the per-port listener names (see listenerName). They let
 // deletion attempt the known resource names even if collection discovery
 // fails; successful discovery adds any other fragments that actually exist.
-func lbCleanup(ctx context.Context, client *loadbalancer.Client, lbName string, listenerNames []string) error {
+func lbCleanup(ctx context.Context, client *loadbalancer.Client, lbName string, listenerNames []string, owner resourceOwner) error {
 	// Delete top-down: each resource is referenced by the one above it. Every
 	// delete tolerates NotFound, so tearing down a partially created or
 	// already-partially-deleted load balancer is safe and idempotent.
@@ -239,7 +286,7 @@ func lbCleanup(ctx context.Context, client *loadbalancer.Client, lbName string, 
 		}
 	}
 
-	deleteResource(fmt.Sprintf("load balancer %q", lbName), client.LoadBalancers().Delete(ctx, lbName))
+	deleteResource(fmt.Sprintf("load balancer %q", lbName), owner.deleteLB(ctx, client, "loadBalancer", lbName))
 
 	// Seed the deletion sets with names that can be reconstructed from the
 	// Service. List failures are still returned, but do not prevent these
@@ -253,7 +300,7 @@ func lbCleanup(ctx context.Context, client *loadbalancer.Client, lbName string, 
 
 	// Include discovered resources so ports removed from the Service, or a
 	// reconcile interrupted before the LoadBalancer was created, are cleaned up.
-	if routes, err := client.L4Routes().List(ctx); err != nil {
+	if routes, err := client.L4Routes().List(ctx, owner); err != nil {
 		recordError("list L4 routes for discovery", err)
 	} else {
 		for _, route := range routes.Items {
@@ -262,7 +309,7 @@ func lbCleanup(ctx context.Context, client *loadbalancer.Client, lbName string, 
 			}
 		}
 	}
-	if services, err := client.BackendServices().List(ctx); err != nil {
+	if services, err := client.BackendServices().List(ctx, owner); err != nil {
 		recordError("list backend services for discovery", err)
 	} else {
 		for _, service := range services.Items {
@@ -273,14 +320,14 @@ func lbCleanup(ctx context.Context, client *loadbalancer.Client, lbName string, 
 	}
 
 	for routeName := range routesToDelete {
-		deleteResource(fmt.Sprintf("L4 route %q", routeName), client.L4Routes().Delete(ctx, routeName))
+		deleteResource(fmt.Sprintf("L4 route %q", routeName), owner.deleteLB(ctx, client, "l4Route", routeName))
 	}
 	for serviceName := range servicesToDelete {
-		deleteResource(fmt.Sprintf("backend service %q", serviceName), client.BackendServices().Delete(ctx, serviceName))
+		deleteResource(fmt.Sprintf("backend service %q", serviceName), owner.deleteLB(ctx, client, "backendService", serviceName))
 	}
 
 	poolName := lbPoolName(lbName)
-	deleteResource(fmt.Sprintf("backend pool %q", poolName), client.BackendPools().Delete(ctx, poolName))
+	deleteResource(fmt.Sprintf("backend pool %q", poolName), owner.deleteLB(ctx, client, "backendPool", poolName))
 
 	return errors.Join(errs...)
 }

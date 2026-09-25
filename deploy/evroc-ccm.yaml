@@ -6,10 +6,10 @@ metadata:
   name: evroc-ccm
   namespace: evroc-system
   labels:
-    helm.sh/chart: evroc-ccm-0.2.0
+    helm.sh/chart: evroc-ccm-0.2.1
     app.kubernetes.io/name: evroc-ccm
     app.kubernetes.io/instance: evroc-ccm
-    app.kubernetes.io/version: "0.2.0"
+    app.kubernetes.io/version: "0.2.1"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: evroc
 ---
@@ -19,10 +19,10 @@ kind: ClusterRole
 metadata:
   name: evroc-ccm
   labels:
-    helm.sh/chart: evroc-ccm-0.2.0
+    helm.sh/chart: evroc-ccm-0.2.1
     app.kubernetes.io/name: evroc-ccm
     app.kubernetes.io/instance: evroc-ccm
-    app.kubernetes.io/version: "0.2.0"
+    app.kubernetes.io/version: "0.2.1"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: evroc
 rules:
@@ -58,10 +58,10 @@ kind: ClusterRoleBinding
 metadata:
   name: evroc-ccm
   labels:
-    helm.sh/chart: evroc-ccm-0.2.0
+    helm.sh/chart: evroc-ccm-0.2.1
     app.kubernetes.io/name: evroc-ccm
     app.kubernetes.io/instance: evroc-ccm
-    app.kubernetes.io/version: "0.2.0"
+    app.kubernetes.io/version: "0.2.1"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: evroc
 roleRef:
@@ -85,10 +85,10 @@ metadata:
   name: evroc-ccm-controller-accounts
   namespace: kube-system
   labels:
-    helm.sh/chart: evroc-ccm-0.2.0
+    helm.sh/chart: evroc-ccm-0.2.1
     app.kubernetes.io/name: evroc-ccm
     app.kubernetes.io/instance: evroc-ccm
-    app.kubernetes.io/version: "0.2.0"
+    app.kubernetes.io/version: "0.2.1"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: evroc
 rules:
@@ -111,10 +111,10 @@ metadata:
   name: evroc-ccm-controller-accounts
   namespace: kube-system
   labels:
-    helm.sh/chart: evroc-ccm-0.2.0
+    helm.sh/chart: evroc-ccm-0.2.1
     app.kubernetes.io/name: evroc-ccm
     app.kubernetes.io/instance: evroc-ccm
-    app.kubernetes.io/version: "0.2.0"
+    app.kubernetes.io/version: "0.2.1"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: evroc
 roleRef:
@@ -133,10 +133,10 @@ metadata:
   name: evroc-ccm
   namespace: evroc-system
   labels:
-    helm.sh/chart: evroc-ccm-0.2.0
+    helm.sh/chart: evroc-ccm-0.2.1
     app.kubernetes.io/name: evroc-ccm
     app.kubernetes.io/instance: evroc-ccm
-    app.kubernetes.io/version: "0.2.0"
+    app.kubernetes.io/version: "0.2.1"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: evroc
 spec:
@@ -148,10 +148,10 @@ spec:
   template:
     metadata:
       labels:
-        helm.sh/chart: evroc-ccm-0.2.0
+        helm.sh/chart: evroc-ccm-0.2.1
         app.kubernetes.io/name: evroc-ccm
         app.kubernetes.io/instance: evroc-ccm
-        app.kubernetes.io/version: "0.2.0"
+        app.kubernetes.io/version: "0.2.1"
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: evroc
     spec:
@@ -173,7 +173,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: evroc-ccm
-          image: "ghcr.io/evroc-oss/evroc-ccm-driver:v0.2.0"
+          image: "ghcr.io/evroc-oss/evroc-ccm-driver:v0.2.1"
           imagePullPolicy: IfNotPresent
           args:
             - --cloud-provider=evroc
