@@ -50,6 +50,11 @@ context:
   project: "my-project"
   region: "se-sto"
 
+# Ownership defaults to the project name, matching CSI. Set a unique, stable
+# identifier for each cluster sharing a project.
+# ccm:
+#   identifier: "cluster-a"
+
 # Load balancer configuration (optional, CCM-specific).
 # When backendNetwork is set, load balancers are deployed only to the listed
 # zones. Omit it to let the platform apply its default backend network.

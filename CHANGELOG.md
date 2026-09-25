@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-24
+
+- Add `ccm.identifier` to scope resource ownership, defaulting to the project name.
+- Keep `service.kubernetes.io/load-balancer-cleanup` until all managed load balancer resources are gone.
+
 ## [0.2.0] - 2026-09-18
 
 - Always delete the CCM-managed public IP with its service.
@@ -21,7 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial version.
 
-[Unreleased]: https://github.com/evroc-oss/evroc-ccm-driver/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/evroc-oss/evroc-ccm-driver/compare/v0.2.1...HEAD
 [0.1.2]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.1.2
 [0.1.3]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.1.3
 [0.2.0]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.2.0
+[0.2.1]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.2.1

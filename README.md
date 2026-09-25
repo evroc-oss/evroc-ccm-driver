@@ -18,6 +18,7 @@ Kubernetes [Cloud Controller Manager](https://kubernetes.io/docs/concepts/archit
   - [Unsupported service fields](#unsupported-service-fields)
 - [Requirements](#requirements)
 - [Configuration](#configuration)
+  - [Resource ownership](#resource-ownership)
   - [Creating credentials](#creating-credentials)
   - [Credential isolation from the CSI driver](#credential-isolation-from-the-csi-driver)
 - [Security considerations](#security-considerations)
@@ -25,6 +26,7 @@ Kubernetes [Cloud Controller Manager](https://kubernetes.io/docs/concepts/archit
   - [Helm (recommended)](#helm-recommended)
   - [Static manifests](#static-manifests)
   - [Important](#important)
+  - [Cleanup and cluster teardown](#cleanup-and-cluster-teardown)
 - [Development](#development)
   - [Prerequisites](#prerequisites)
 - [License](#license)
@@ -57,9 +59,22 @@ service's node port and is forwarded from there by kube-proxy.
 
 | Annotation | Default | Meaning |
 |------------|---------|---------|
-| `ccm.evroc.com/public-ip-ref` | none | Use a pre-existing public IP instead of allocating one. An IP given here is not deleted with the service |
+| `ccm.evroc.com/public-ip-ref` | none | Use a pre-existing public IP instead of allocating one. Requires the full evroc resource ID (see below). An IP given here is not deleted with the service |
 | `ccm.evroc.com/lb-type` | `external` | Only `external` is supported. `internal` is rejected, since the evroc API requires a public IP on every load balancer |
 | `ccm.evroc.com/proxy-protocol` | `false` | Send the PROXY protocol header so backends can recover the client address. **Only enable this if the backend parses it** — otherwise it is read as application data and every connection breaks |
+
+The `ccm.evroc.com/public-ip-ref` value must be the full evroc resource ID,
+including the leading `/`, project, region, and public IP name. For example:
+
+```yaml
+metadata:
+  annotations:
+    ccm.evroc.com/public-ip-ref: "/networking/projects/PROJECT_ID/regions/se-sto/publicIPs/IP_NAME"
+```
+
+Replace `PROJECT_ID` and `IP_NAME` with your public IP's project ID and name,
+and `se-sto` with its region if different. Using only `IP_NAME` is not supported.
+See the [static IP example](examples/03-static-ip.yaml) for a complete manifest.
 
 ### Network prerequisites
 
@@ -142,6 +157,25 @@ context:
 
 See [deploy/evroc-config-example.yaml](deploy/evroc-config-example.yaml) for the full example, including the optional CCM-specific `loadbalancers` section for backend network and IP stack configuration.
 
+### Resource ownership
+
+For clusters sharing an evroc project, set a unique, stable identifier in each
+CCM configuration:
+
+```yaml
+ccm:
+  identifier: cluster-a
+```
+
+CCM labels its load balancers, pools, backend services, routes and allocated IPs
+with `managed-by: cluster-a`. It filters discovery by this label and refuses to
+modify resources with missing or different ownership labels. Referenced external
+IPs remain unmodified. This works independently of CAPI.
+
+The identifier defaults to the project name, matching CSI. Set distinct identifiers
+for clusters sharing a project, and keep them unchanged while resources exist.
+Unlabeled resources are never adopted automatically.
+
 ### Creating credentials
 
 The CCM needs access to three APIs:
@@ -218,7 +252,7 @@ kubectl create secret generic evroc-ccm-config \
 
 ```bash
 helm install evroc-ccm oci://ghcr.io/evroc-oss/charts/evroc-ccm \
-  --version 0.2.0 \
+  --version 0.2.1 \
   --namespace evroc-system \
   --set evroc.existingConfigSecret=evroc-ccm-config
 ```
@@ -252,6 +286,15 @@ kubectl apply -f deploy/evroc-ccm.yaml
 ### Important
 
 Nodes must be started with `--cloud-provider=external` for the CCM to initialize them.
+
+### Cleanup and cluster teardown
+
+Deleting a LoadBalancer Service cleans up its managed cloud resources, including
+partially created stacks. The `service.kubernetes.io/load-balancer-cleanup`
+finalizer remains until cleanup completes; externally supplied public IPs are retained.
+
+Before uninstalling CCM or destroying the cluster, delete LoadBalancer Services
+and wait for deletion to finish. Otherwise, billable resources may remain.
 
 ## Development
 

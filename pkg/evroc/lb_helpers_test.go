@@ -83,22 +83,22 @@ func (r *sdkRecorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	switch {
 	case strings.Contains(req.URL.Path, "/backendPools"):
 		writeJSON(w, successStatus(req.Method), map[string]any{
-			"metadata": map[string]any{"id": name},
+			"metadata": map[string]any{"id": name, "userLabels": map[string]string{managedByLabel: "test-project"}},
 			"spec":     map[string]any{},
 		})
 	case strings.Contains(req.URL.Path, "/backendServices"):
 		writeJSON(w, successStatus(req.Method), map[string]any{
-			"metadata": map[string]any{"id": name},
+			"metadata": map[string]any{"id": name, "userLabels": map[string]string{managedByLabel: "test-project"}},
 			"spec":     map[string]any{"port": 30080},
 		})
 	case strings.Contains(req.URL.Path, "/l4Routes"):
 		writeJSON(w, successStatus(req.Method), map[string]any{
-			"metadata": map[string]any{"id": name},
+			"metadata": map[string]any{"id": name, "userLabels": map[string]string{managedByLabel: "test-project"}},
 			"spec":     map[string]any{"defaultBackendServiceRef": "ref"},
 		})
 	case strings.Contains(req.URL.Path, "/loadBalancers"):
 		writeJSON(w, successStatus(req.Method), map[string]any{
-			"metadata": map[string]any{"id": r.lbName},
+			"metadata": map[string]any{"id": r.lbName, "userLabels": map[string]string{managedByLabel: "test-project"}},
 			"spec":     map[string]any{"publicIPRef": "/networking/projects/p/regions/r/publicIPs/ip"},
 		})
 	default:
@@ -118,7 +118,7 @@ func successStatus(method string) int {
 	return http.StatusOK
 }
 
-func testSDKLBClient(t *testing.T, recorder *sdkRecorder) *loadbalancer.Client {
+func testSDKLBClient(t *testing.T, recorder http.Handler) *loadbalancer.Client {
 	t.Helper()
 	httpClient := &http.Client{Transport: roundTripperFunc(func(req *http.Request) *http.Response {
 		response := httptest.NewRecorder()
@@ -147,6 +147,7 @@ func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 func TestLBEnsureSDKContract(t *testing.T) {
 	const lbName, listener = "ccm-0123456789abcdef01234567", "http-80"
 	opts := lbEnsureOptions{
+		Owner:       "test-project",
 		Name:        lbName,
 		PublicIPRef: "/networking/projects/p/regions/r/publicIPs/ip",
 		Listeners: []listenerInput{
@@ -221,7 +222,7 @@ func TestLBCleanupDiscoversResourcesWithoutLoadBalancer(t *testing.T) {
 		patches:             map[string]map[string]any{},
 		deletes:             map[string]bool{},
 	}
-	if err := lbCleanup(context.Background(), testSDKLBClient(t, recorder), lbName, nil); err != nil {
+	if err := lbCleanup(context.Background(), testSDKLBClient(t, recorder), lbName, nil, "test-project"); err != nil {
 		t.Fatalf("lbCleanup() error = %v", err)
 	}
 	for _, name := range []string{
@@ -244,4 +245,70 @@ func countMethod(methods []string, method string) int {
 		}
 	}
 	return count
+}
+
+func TestLBHasDependents(t *testing.T) {
+	const lbName = "ccm-0123456789abcdef01234567"
+	for _, tt := range []struct {
+		name           string
+		pool           bool
+		wrongOwner     bool
+		route          string
+		service        string
+		failCollection string
+		wantExists     bool
+		wantErr        bool
+	}{
+		{name: "empty"},
+		{name: "foreign pool owner", pool: true, wrongOwner: true, wantExists: true, wantErr: true},
+		{name: "foreign route owner", route: lbName + "-old-90-route", wrongOwner: true, wantExists: true, wantErr: true},
+		{name: "foreign service owner", service: lbName + "-old-90-svc", wrongOwner: true, wantExists: true, wantErr: true},
+		{name: "pool", pool: true, wantExists: true},
+		{name: "removed port route", route: lbName + "-old-90-route", wantExists: true},
+		{name: "removed port service", service: lbName + "-old-90-svc", wantExists: true},
+		{name: "foreign resources", route: "another-lb-http-80-route", service: "another-lb-http-80-svc"},
+		{name: "pool lookup fails", failCollection: "backendPools", wantErr: true},
+		{name: "route discovery fails", failCollection: "l4Routes", wantErr: true},
+		{name: "service discovery fails", failCollection: "backendServices", wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			labels := map[string]string{"managed-by": "test-project"}
+			if tt.wrongOwner {
+				labels["managed-by"] = "another-cluster"
+			}
+			handler := http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if req.Method != http.MethodGet {
+					t.Errorf("existence check mutated cloud resources: %s", req.Method)
+				}
+				if tt.failCollection != "" && strings.Contains(req.URL.Path, "/"+tt.failCollection) {
+					writeJSON(w, http.StatusForbidden, map[string]any{"reason": "forbidden"})
+					return
+				}
+				if strings.Contains(req.URL.Path, "/backendPools/") {
+					if tt.pool {
+						writeJSON(w, http.StatusOK, map[string]any{"metadata": map[string]any{"id": lbPoolName(lbName), "userLabels": labels}})
+					} else {
+						writeJSON(w, http.StatusNotFound, map[string]any{"reason": "not found"})
+					}
+					return
+				}
+				if got := req.URL.Query().Get("labelSelector"); got != "managed-by=test-project" {
+					t.Errorf("labelSelector=%q", got)
+				}
+				name := tt.service
+				if strings.HasSuffix(req.URL.Path, "/l4Routes") {
+					name = tt.route
+				}
+				items := []any{}
+				if name != "" {
+					items = append(items, map[string]any{"metadata": map[string]any{"id": name, "userLabels": labels}})
+				}
+				writeJSON(w, http.StatusOK, map[string]any{"items": items})
+			})
+			exists, err := lbHasDependents(context.Background(), testSDKLBClient(t, handler), lbName, "test-project")
+			if exists != tt.wantExists || (err != nil) != tt.wantErr {
+				t.Fatalf("exists=%v err=%v; want exists=%v error=%v", exists, err, tt.wantExists, tt.wantErr)
+			}
+		})
+	}
 }

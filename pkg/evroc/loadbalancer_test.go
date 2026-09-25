@@ -36,6 +36,12 @@ type recordingLBClient struct {
 	deletedName  string
 	deletedPorts []string
 	deleteErr    error
+	dependents   bool
+	discoveryErr error
+}
+
+func (c *recordingLBClient) HasDependents(context.Context, string) (bool, error) {
+	return c.dependents, c.discoveryErr
 }
 
 func (c *recordingLBClient) Ensure(_ context.Context, opts lbEnsureOptions) (*lbtypes.Loadbalancer, error) {
@@ -69,17 +75,21 @@ func (c *recordingLBClient) Delete(_ context.Context, name string, ports []strin
 }
 
 func (c *recordingLBClient) GetLB(_ context.Context, _ string) (*lbtypes.Loadbalancer, error) {
+	if c.existing == nil && c.getErr == nil {
+		return nil, evroc.ErrNotFound
+	}
 	return c.existing, c.getErr
 }
 
 type recordingPublicIPs struct {
-	ip        *networkingtypes.PublicIP
-	getErr    error
-	createErr error
-	waitErr   error
-	created   bool
-	deleted   bool
-	getNames  []string
+	ip                *networkingtypes.PublicIP
+	getErr            error
+	createErr         error
+	waitErr           error
+	created           bool
+	deleted           bool
+	getNames          []string
+	retainAfterDelete bool
 }
 
 func (c *recordingPublicIPs) Create(_ context.Context, _ *networkingtypes.PublicIPRequest) (*networkingtypes.PublicIP, error) {
@@ -89,6 +99,9 @@ func (c *recordingPublicIPs) Create(_ context.Context, _ *networkingtypes.Public
 
 func (c *recordingPublicIPs) Get(_ context.Context, name string) (*networkingtypes.PublicIP, error) {
 	c.getNames = append(c.getNames, name)
+	if c.deleted && !c.retainAfterDelete {
+		return nil, evroc.ErrNotFound
+	}
 	if c.getErr != nil && !c.created {
 		return nil, c.getErr
 	}
@@ -146,8 +159,9 @@ func nodeInZone(name, zone string) *v1.Node {
 
 func testPublicIP(name, address string) *networkingtypes.PublicIP {
 	project, region := "test-project", "se-sto"
+	labels := networkingtypes.UserLabels{managedByLabel: "test-project"}
 	return &networkingtypes.PublicIP{
-		Metadata: networkingtypes.RegionalMetadataResponse{Id: name, Project: &project, Region: &region},
+		Metadata: networkingtypes.RegionalMetadataResponse{Id: name, Project: &project, Region: &region, UserLabels: &labels},
 		Status:   networkingtypes.PublicIPStatus{PublicIPv4Address: &address},
 	}
 }
@@ -436,7 +450,7 @@ func TestEnsureLoadBalancerDeletedAlwaysDeletesManagedIP(t *testing.T) {
 			if tt.annotation != nil {
 				service.Annotations = map[string]string{annotationPublicIPRef: *tt.annotation}
 			}
-			client, ips := &recordingLBClient{}, &recordingPublicIPs{}
+			client, ips := &recordingLBClient{}, &recordingPublicIPs{ip: testPublicIP("managed-ip", "192.0.2.1")}
 			lb := newTestLB(client, ips)
 			if err := lb.EnsureLoadBalancerDeleted(context.Background(), "cluster", service); err != nil {
 				t.Fatal(err)
@@ -492,3 +506,71 @@ func TestListenerAndBackendHelpers(t *testing.T) {
 }
 
 func ptr[T any](value T) *T { return &value }
+
+// Model the service controller's exists gate: false permits finalizer removal
+// without calling EnsureLoadBalancerDeleted.
+func TestGetLoadBalancerPartialStack(t *testing.T) {
+	for _, tt := range []struct {
+		name         string
+		dependents   bool
+		ipErr        error
+		discoveryErr error
+		wantExists   bool
+		wantErr      bool
+	}{
+		{name: "all absent", ipErr: evroc.ErrNotFound},
+		{name: "orphan listener or pool", dependents: true, wantExists: true},
+		{name: "orphan managed IP", wantExists: true},
+		{name: "discovery unavailable", discoveryErr: errors.New("forbidden"), wantErr: true},
+		{name: "IP lookup unavailable", ipErr: errors.New("forbidden"), wantErr: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			client := &recordingLBClient{dependents: tt.dependents, discoveryErr: tt.discoveryErr}
+			ips := &recordingPublicIPs{getErr: tt.ipErr, ip: testPublicIP("managed-ip", "192.0.2.1")}
+			lb := newTestLB(client, ips)
+			service := testService("api", "default")
+			service.Annotations = map[string]string{annotationPublicIPRef: "/networking/projects/p/regions/r/publicIPs/customer-ip"}
+			_, exists, err := lb.GetLoadBalancer(context.Background(), "cluster", service)
+			if exists != tt.wantExists || (err != nil) != tt.wantErr {
+				t.Fatalf("exists=%v err=%v; want exists=%v error=%v", exists, err, tt.wantExists, tt.wantErr)
+			}
+			for _, name := range ips.getNames {
+				if name != lb.publicIPName(lb.GetLoadBalancerName(context.Background(), "cluster", service)) {
+					t.Fatalf("inspected external IP %q", name)
+				}
+			}
+		})
+	}
+}
+
+func TestDeletionRetriesAfterFrontendDisappears(t *testing.T) {
+	client := &recordingLBClient{dependents: true}
+	ips := &recordingPublicIPs{ip: testPublicIP("managed-ip", "192.0.2.1")}
+	lb := newTestLB(client, ips)
+	ctx := context.Background()
+	service := testService("api", "default")
+	if err := lb.EnsureLoadBalancerDeleted(ctx, "cluster", service); err == nil {
+		t.Fatal("accepted asynchronous deletion while dependents still exist")
+	}
+	if _, exists, err := lb.GetLoadBalancer(ctx, "cluster", service); err != nil || !exists {
+		t.Fatalf("cleanup retry would be skipped: exists=%v err=%v", exists, err)
+	}
+	client.dependents = false
+	if err := lb.EnsureLoadBalancerDeleted(ctx, "cluster", service); err != nil {
+		t.Fatalf("fully deleted stack should release finalizer: %v", err)
+	}
+}
+
+func TestDeletionWaitsForManagedIP(t *testing.T) {
+	ips := &recordingPublicIPs{retainAfterDelete: true, ip: testPublicIP("managed-ip", "192.0.2.1")}
+	lb := newTestLB(&recordingLBClient{}, ips)
+	service := testService("api", "default")
+	ctx := context.Background()
+	if err := lb.EnsureLoadBalancerDeleted(ctx, "cluster", service); err == nil {
+		t.Fatal("released finalizer while managed IP still exists")
+	}
+	ips.retainAfterDelete = false
+	if err := lb.EnsureLoadBalancerDeleted(ctx, "cluster", service); err != nil {
+		t.Fatalf("cleanup did not complete after IP disappeared: %v", err)
+	}
+}
