@@ -178,6 +178,33 @@ func TestLBEnsureSDKContract(t *testing.T) {
 		}
 	})
 
+	t.Run("health check node port selects an HTTP health check", func(t *testing.T) {
+		recorder := &sdkRecorder{
+			conflict: true,
+			lbName:   lbName,
+			listener: listener,
+			patches:  map[string]map[string]any{},
+			deletes:  map[string]bool{},
+		}
+		localOpts := opts
+		localOpts.HealthCheckNodePort = 31000
+		if _, err := lbEnsure(context.Background(), testSDKLBClient(t, recorder), localOpts); err != nil {
+			t.Fatalf("lbEnsure() error = %v", err)
+		}
+		var hc map[string]any
+		for requestPath, patch := range recorder.patches {
+			if strings.HasSuffix(requestPath, "/backendServices/"+lbBackendServiceName(lbName, listener)) {
+				hc, _ = patch["spec"].(map[string]any)["healthCheck"].(map[string]any)
+			}
+		}
+		if hc == nil {
+			t.Fatalf("backend service health check was not patched: %v", recorder.patches)
+		}
+		if hc["tcp"] != nil || hc["http"] == nil || hc["http"].(map[string]any)["path"] != localHealthCheckPath || hc["targetPort"] != float64(31000) {
+			t.Errorf("healthCheck = %v, want HTTP %s on port 31000", hc, localHealthCheckPath)
+		}
+	})
+
 	t.Run("patches graph and removes stale listeners", func(t *testing.T) {
 		recorder := &sdkRecorder{
 			conflict: true,

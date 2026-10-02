@@ -1,0 +1,69 @@
+# Example 5: Local External Traffic Policy
+#
+# With externalTrafficPolicy: Local, kube-proxy only forwards a connection to
+# pods on the node that received it, so the extra hop to a pod on another node
+# is skipped. The CCM supports this by health checking kube-proxy's
+# healthCheckNodePort over HTTP: a node answers 200 only while it has a local
+# pod, so the load balancer sends traffic to those nodes alone.
+#
+# This example runs a single replica on a multi-node cluster, so most nodes
+# have no local pod and must be drained by the health check.
+#
+# Note: unlike pass-through load balancers on other clouds, Local on evroc
+# does NOT preserve the client source address, because the evroc load balancer
+# is a proxy. If the backend needs the client address, also set the
+# ccm.evroc.com/proxy-protocol: "true" annotation — but only if the backend
+# parses the PROXY protocol header (agnhost below does not).
+#
+# Usage:
+#   kubectl apply -f examples/05-local-traffic-policy.yaml
+#   kubectl get svc local-demo -w                        # wait for EXTERNAL-IP
+#   kubectl get svc local-demo -o jsonpath='{.spec.healthCheckNodePort}{"\n"}'
+#
+#   # Every request succeeds even though only one node has a pod:
+#   for i in $(seq 1 10); do curl -s http://<EXTERNAL-IP>/hostname; echo; done
+#
+#   # The address the backend sees is the load balancer's, not the client's:
+#   curl -s http://<EXTERNAL-IP>/clientip
+#
+# Cleanup:
+#   kubectl delete -f examples/05-local-traffic-policy.yaml
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: local-demo
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: local-demo
+  template:
+    metadata:
+      labels:
+        app: local-demo
+    spec:
+      containers:
+        - name: api
+          image: registry.k8s.io/e2e-test-images/agnhost:2.53
+          args: ["netexec", "--http-port=8080"]
+          ports:
+            - containerPort: 8080
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: local-demo
+  namespace: default
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: Local
+  selector:
+    app: local-demo
+  ports:
+    - name: http
+      port: 80
+      targetPort: 8080

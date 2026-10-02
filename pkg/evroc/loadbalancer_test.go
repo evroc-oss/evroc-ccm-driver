@@ -232,11 +232,18 @@ func TestValidateService(t *testing.T) {
 			wantErr: "requires a public IP",
 		},
 		{
-			name: "local traffic policy is rejected",
+			name: "local traffic policy with a health check node port is supported",
+			mutate: func(s *v1.Service) {
+				s.Spec.ExternalTrafficPolicy = v1.ServiceExternalTrafficPolicyLocal
+				s.Spec.HealthCheckNodePort = 31000
+			},
+		},
+		{
+			name: "local traffic policy without a health check node port is rejected",
 			mutate: func(s *v1.Service) {
 				s.Spec.ExternalTrafficPolicy = v1.ServiceExternalTrafficPolicyLocal
 			},
-			wantErr: "externalTrafficPolicy",
+			wantErr: "healthCheckNodePort",
 		},
 		{
 			name: "client IP session affinity is rejected",
@@ -341,6 +348,23 @@ func TestEnsureLoadBalancer(t *testing.T) {
 		}
 		if len(client.ensured) != 1 || !client.ensured[0].ProxyProtocol || client.ensured[0].Listeners[0].BackendPort != 32080 {
 			t.Errorf("existing LB was not fully reconciled: %#v", client.ensured)
+		}
+	})
+
+	t.Run("local traffic policy health checks the health check node port", func(t *testing.T) {
+		service := testService("api", "default")
+		service.Spec.ExternalTrafficPolicy = v1.ServiceExternalTrafficPolicyLocal
+		service.Spec.HealthCheckNodePort = 31000
+		client := &recordingLBClient{getErr: evroc.ErrNotFound, address: "203.0.113.3"}
+		lb := newTestLB(client, &recordingPublicIPs{})
+		lbName := lb.GetLoadBalancerName(context.Background(), "cluster", service)
+		lb.ips = &recordingPublicIPs{ip: testPublicIP(lb.publicIPName(lbName), "203.0.113.3")}
+
+		if _, err := lb.EnsureLoadBalancer(context.Background(), "cluster", service, testNodes("node-a")); err != nil {
+			t.Fatalf("EnsureLoadBalancer() error = %v", err)
+		}
+		if len(client.ensured) != 1 || client.ensured[0].HealthCheckNodePort != 31000 {
+			t.Errorf("health check node port was not passed through: %#v", client.ensured)
 		}
 	})
 

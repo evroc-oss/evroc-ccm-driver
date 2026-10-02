@@ -76,6 +76,33 @@ Replace `PROJECT_ID` and `IP_NAME` with your public IP's project ID and name,
 and `se-sto` with its region if different. Using only `IP_NAME` is not supported.
 See the [static IP example](examples/03-static-ip.yaml) for a complete manifest.
 
+### External traffic policy
+
+`externalTrafficPolicy: Local` is supported. For each such service Kubernetes
+allocates a dedicated `healthCheckNodePort`, and kube-proxy on every node
+answers `/healthz` on that port with 200 only while the node has a ready pod
+for that service. Each service therefore has its own port and its own
+per-node verdict: a node can be healthy for one service and drained for
+another. The CCM points that service's load balancer health check at its port
+instead of the traffic port, so nodes without a pod are drained and each
+connection is delivered to a pod on the receiving node with no extra hop and
+no node-level SNAT.
+
+Keep in mind:
+
+- Load is balanced across nodes, not pods. A node with three pods gets the same
+  share as a node with one. Use a topology spread constraint, or stay on
+  `Cluster` when replicas are few relative to nodes.
+- A node that loses its last pod keeps receiving connections until its health
+  check fails. Failover speed is set by the platform's health check interval.
+- The health check node port must be served on every node. kube-proxy does
+  this; a CNI that replaces kube-proxy must serve it too.
+
+Unlike on pass-through load balancers, `Local` on evroc does **not** preserve
+the client source address: the evroc load balancer is a proxy, so backends see
+its address. Enable `ccm.evroc.com/proxy-protocol` if the backend needs the
+client address. See the [local traffic policy example](examples/05-local-traffic-policy.yaml).
+
 ### Network prerequisites
 
 A `type: LoadBalancer` service is also allocated a node port, and the evroc
@@ -114,7 +141,6 @@ service never appears healthy while behaving differently from what it asked for:
 |-------|-----|
 | non-TCP `ports[].protocol` | evroc load balancer listeners currently support TCP only |
 | `allocateLoadBalancerNodePorts: false` | evroc load balancers forward to node ports |
-| `externalTrafficPolicy: Local` | `Local` requires preserving the client source address, which the evroc load balancer does not support |
 | `sessionAffinity: ClientIP` | evroc backend services have no session affinity setting |
 | Any `ipFamilies` containing `IPv6` | evroc load balancer frontends currently support IPv4 only; partially implementing a requested dual-stack load balancer would be misleading |
 
@@ -252,7 +278,7 @@ kubectl create secret generic evroc-ccm-config \
 
 ```bash
 helm install evroc-ccm oci://ghcr.io/evroc-oss/charts/evroc-ccm \
-  --version 0.2.1 \
+  --version 0.2.2 \
   --namespace evroc-system \
   --set evroc.existingConfigSecret=evroc-ccm-config
 ```

@@ -98,18 +98,34 @@ func validateLBType(service *v1.Service) error {
 	}
 }
 
-// validateTrafficPolicy rejects externalTrafficPolicy: Local.
+// validateTrafficPolicy checks that externalTrafficPolicy: Local can be
+// honoured.
 //
-// Local requires the load balancer to preserve the client source address,
-// which the evroc load balancer does not do.
+// Under Local, kube-proxy only forwards to pods on the same node, so the load
+// balancer must health check kube-proxy's healthCheckNodePort to avoid sending
+// traffic to nodes that would drop it. Kubernetes allocates that port together
+// with the node ports; without it the service cannot be routed correctly.
+//
+// Note that Local does not preserve the client source address on evroc, since
+// the load balancer is a proxy. Backends that need the client address must
+// opt in to the PROXY protocol.
 func validateTrafficPolicy(service *v1.Service) error {
-	if service.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyLocal {
+	if service.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyLocal && service.Spec.HealthCheckNodePort == 0 {
 		return &unsupportedServiceError{
-			field:  "spec.externalTrafficPolicy: Local",
-			reason: "Local requires preserving the client source address, which the evroc load balancer does not support",
+			field:  "spec.healthCheckNodePort: 0",
+			reason: "externalTrafficPolicy: Local requires a health check node port; enable load balancer node-port allocation",
 		}
 	}
 	return nil
+}
+
+// localHealthCheckNodePort returns the port the load balancer must health
+// check under externalTrafficPolicy: Local, or 0 for Cluster.
+func localHealthCheckNodePort(service *v1.Service) int32 {
+	if service.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyLocal {
+		return service.Spec.HealthCheckNodePort
+	}
+	return 0
 }
 
 func validateSessionAffinity(service *v1.Service) error {
