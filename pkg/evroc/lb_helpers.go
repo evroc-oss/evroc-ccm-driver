@@ -28,6 +28,10 @@ func lbRouteName(lbName, listenerName string) string {
 	return lbName + "-" + listenerName + "-route"
 }
 
+// localHealthCheckPath is the path kube-proxy serves on a service's
+// healthCheckNodePort. It returns 200 only when the node has a local endpoint.
+const localHealthCheckPath = "/healthz"
+
 type listenerInput struct {
 	Name         string
 	FrontendPort int32
@@ -46,6 +50,13 @@ type lbEnsureOptions struct {
 	// ProxyProtocol enables the PROXY protocol on every backend service, so
 	// backends can recover the client's address. Off unless the service opts in.
 	ProxyProtocol bool
+
+	// HealthCheckNodePort, when non-zero, switches every backend service to an
+	// HTTP health check of kube-proxy's /healthz on this node port instead of a
+	// TCP check of the traffic port. Set for externalTrafficPolicy: Local, where
+	// kube-proxy answers 200 only on nodes that have a local endpoint, so the
+	// load balancer stops sending traffic to nodes that would drop it.
+	HealthCheckNodePort int32
 
 	// BackendStackType is the cluster's IP stack. When "ipv6-only" the backend
 	// services select IPv6 so the load balancer can reach backends that have no
@@ -82,12 +93,22 @@ func lbEnsure(ctx context.Context, client *loadbalancer.Client, opts lbEnsureOpt
 	var lbListeners []lbtypes.LoadbalancerSpecListenersItem
 	for _, l := range opts.Listeners {
 		svcName := lbBackendServiceName(lbName, l.Name)
-		svcReq := loadbalancer.NewBackendServiceBuilder(svcName).
+		svcBuilder := loadbalancer.NewBackendServiceBuilder(svcName).
 			WithLabels(opts.Owner.labels()).
 			WithPort(l.BackendPort).
-			WithBackendPoolRef(client.BackendPoolRef(poolName)).
-			WithTCPHealthCheck().
-			Build()
+			WithBackendPoolRef(client.BackendPoolRef(poolName))
+		if opts.HealthCheckNodePort != 0 {
+			svcBuilder = svcBuilder.WithHTTPHealthCheck(localHealthCheckPath)
+		} else {
+			svcBuilder = svcBuilder.WithTCPHealthCheck()
+		}
+		svcReq := svcBuilder.Build()
+		// The builder has no target-port setter, so it is applied to the built
+		// request directly.
+		if opts.HealthCheckNodePort != 0 {
+			hcPort := opts.HealthCheckNodePort
+			svcReq.Spec.HealthCheck.TargetPort = &hcPort
+		}
 		proxy := opts.ProxyProtocol
 		svcReq.Spec.ProxyProtocol = &proxy
 		// Only ipv6-only clusters need this: on dual-stack the backends still

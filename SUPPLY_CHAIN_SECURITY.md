@@ -24,7 +24,7 @@ Download the chart archive and its Sigstore bundle from the GitHub release,
 verify the signature, and then install the verified archive:
 
 ```bash
-VERSION=0.2.1
+VERSION=0.2.2
 RELEASE_URL="https://github.com/evroc-oss/evroc-ccm-driver/releases/download/v${VERSION}"
 
 curl -sSLO "${RELEASE_URL}/evroc-ccm-${VERSION}.tgz"
@@ -43,7 +43,7 @@ helm install evroc-ccm "./evroc-ccm-${VERSION}.tgz" \
 ## Verify the container image signature
 
 ```bash
-VERSION=v0.2.1
+VERSION=v0.2.2
 IMAGE="ghcr.io/evroc-oss/evroc-ccm-driver:${VERSION}"
 
 cosign verify "${IMAGE}" \
@@ -57,7 +57,7 @@ has not changed since signing.
 ## Verify the SBOM attestation
 
 ```bash
-VERSION=v0.2.1
+VERSION=v0.2.2
 IMAGE="ghcr.io/evroc-oss/evroc-ccm-driver:${VERSION}"
 
 cosign verify-attestation "${IMAGE}" \
@@ -83,7 +83,7 @@ The resulting file can be inspected directly or analyzed with tools such as
 ## Verify the SLSA provenance attestation
 
 ```bash
-VERSION=v0.2.1
+VERSION=v0.2.2
 IMAGE="ghcr.io/evroc-oss/evroc-ccm-driver:${VERSION}"
 
 cosign verify-attestation "${IMAGE}" \
