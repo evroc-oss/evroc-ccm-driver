@@ -278,7 +278,7 @@ kubectl create secret generic evroc-ccm-config \
 
 ```bash
 helm install evroc-ccm oci://ghcr.io/evroc-oss/charts/evroc-ccm \
-  --version 0.2.2 \
+  --version 0.3.1 \
   --namespace evroc-system \
   --set evroc.existingConfigSecret=evroc-ccm-config
 ```

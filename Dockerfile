@@ -11,14 +11,7 @@ WORKDIR /build
 # Copy go mod files
 COPY go.mod go.sum ./
 
-# Configure Git to use the provided token for private repos
-# The github_token secret is provided by the build workflow
-RUN --mount=type=secret,id=github_token \
-    if [ -f /run/secrets/github_token ]; then \
-        export GITHUB_TOKEN=$(cat /run/secrets/github_token) && \
-        git config --global url."https://${GITHUB_TOKEN}@github.com/".insteadOf "https://github.com/"; \
-    fi && \
-    GOPRIVATE=github.com/evroc-oss GOSUMDB=off go mod download
+RUN go mod download
 
 COPY . .
 

@@ -84,8 +84,6 @@ jobs:
             VERSION=${{ steps.get_version.outputs.VERSION_NO_V }}
             GIT_COMMIT=${{ github.sha }}
             BUILD_DATE=${{ github.event.repository.updated_at }}
-          secrets: |
-            github_token=${{ secrets.GITHUB_TOKEN }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
