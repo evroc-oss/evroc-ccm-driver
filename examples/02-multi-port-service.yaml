@@ -41,6 +41,13 @@ spec:
       labels:
         app: myapp
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         # agnhost's netexec serves HTTP on every port it is given, so all three
         # listeners can be exercised without a custom image.
@@ -54,6 +61,17 @@ spec:
               containerPort: 8443
             - name: metrics
               containerPort: 9090
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
 
 ---
 apiVersion: v1
