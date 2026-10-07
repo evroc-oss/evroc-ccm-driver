@@ -16,7 +16,7 @@
 #   6. CCM reads the allocated IP and writes it back to Service.status.loadBalancer.ingress
 #
 # Traffic flow:
-#   Client :80 → PublicIP → LoadBalancer :80 → Node :30080 (NodePort) → kube-proxy → Pod :80
+#   Client :80 → PublicIP → LoadBalancer :80 → Node :30080 (NodePort) → kube-proxy → Pod :8080
 #
 # Prerequisites:
 #   - A Kubernetes cluster on evroc with --cloud-provider=external
@@ -47,11 +47,35 @@ spec:
       labels:
         app: nginx
     spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 101
+        runAsGroup: 101
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: nginx
-          image: nginx:1.27
+          image: nginxinc/nginx-unprivileged:1.27
           ports:
-            - containerPort: 80
+            - containerPort: 8080
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir: {}
 
 ---
 apiVersion: v1
@@ -66,6 +90,6 @@ spec:
   ports:
     - name: http
       port: 80          # The port the LB listens on (frontend)
-      targetPort: 80    # The port on the pod
+      targetPort: 8080  # The port on the pod
       # nodePort is auto-assigned by Kubernetes (e.g., 30080)
       # The CCM uses this NodePort as the BackendService port
