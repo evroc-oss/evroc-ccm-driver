@@ -23,6 +23,7 @@ type sdkRecorder struct {
 	lbName              string
 	listener            string
 	methods             []string
+	posts               map[string]map[string]any
 	patches             map[string]map[string]any
 	deletes             map[string]bool
 }
@@ -31,6 +32,14 @@ func (r *sdkRecorder) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.methods = append(r.methods, req.Method+" "+req.URL.Path)
 	w.Header().Set("Content-Type", "application/json")
 
+	if req.Method == http.MethodPost && r.posts != nil {
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		r.posts[req.URL.Path] = body
+	}
 	if req.Method == http.MethodPost && r.conflict {
 		w.WriteHeader(http.StatusConflict)
 		_, _ = w.Write([]byte(`{"reason":"already exists"}`))
@@ -178,32 +187,57 @@ func TestLBEnsureSDKContract(t *testing.T) {
 		}
 	})
 
-	t.Run("health check node port selects an HTTP health check", func(t *testing.T) {
-		recorder := &sdkRecorder{
-			conflict: true,
-			lbName:   lbName,
-			listener: listener,
-			patches:  map[string]map[string]any{},
-			deletes:  map[string]bool{},
-		}
-		localOpts := opts
-		localOpts.HealthCheckNodePort = 31000
-		if _, err := lbEnsure(context.Background(), testSDKLBClient(t, recorder), localOpts); err != nil {
-			t.Fatalf("lbEnsure() error = %v", err)
-		}
-		var hc map[string]any
-		for requestPath, patch := range recorder.patches {
-			if strings.HasSuffix(requestPath, "/backendServices/"+lbBackendServiceName(lbName, listener)) {
-				hc, _ = patch["spec"].(map[string]any)["healthCheck"].(map[string]any)
+	for _, host := range []string{"", "health.example.com"} {
+		for _, conflict := range []bool{false, true} {
+			name := "creates HTTP health check with valid Host"
+			if conflict {
+				name = "updates HTTP health check with valid Host"
 			}
+			t.Run(name+"/"+host, func(t *testing.T) {
+				recorder := &sdkRecorder{
+					conflict: conflict, lbName: lbName, listener: listener,
+					posts:   map[string]map[string]any{},
+					patches: map[string]map[string]any{}, deletes: map[string]bool{},
+				}
+				localOpts := opts
+				localOpts.HealthCheckPort = 31000
+				localOpts.HealthCheckPath = localHealthCheckPath
+				localOpts.HealthCheckHost = host
+				if _, err := lbEnsure(context.Background(), testSDKLBClient(t, recorder), localOpts); err != nil {
+					t.Fatalf("lbEnsure() error = %v", err)
+				}
+				requests, suffix := recorder.posts, "/backendServices"
+				if conflict {
+					requests, suffix = recorder.patches, "/backendServices/"+lbBackendServiceName(lbName, listener)
+				}
+				var hc map[string]any
+				for requestPath, body := range requests {
+					if strings.HasSuffix(requestPath, suffix) {
+						hc, _ = body["spec"].(map[string]any)["healthCheck"].(map[string]any)
+					}
+				}
+				if hc == nil {
+					t.Fatalf("backend service health check was not sent: %v", requests)
+				}
+				httpCheck, _ := hc["http"].(map[string]any)
+				if hc["tcp"] != nil || httpCheck["path"] != localHealthCheckPath || hc["targetPort"] != float64(31000) {
+					t.Errorf("healthCheck = %v, want HTTP %s on port 31000", hc, localHealthCheckPath)
+				}
+				got, present := httpCheck["host"]
+				if host != "" {
+					if got != host {
+						t.Errorf("Host = %v, want %q", got, host)
+					}
+				} else if conflict {
+					if !present || got != nil {
+						t.Errorf("removing override must patch host:null, got %v", httpCheck)
+					}
+				} else if present {
+					t.Errorf("creation without override must omit host, got %v", httpCheck)
+				}
+			})
 		}
-		if hc == nil {
-			t.Fatalf("backend service health check was not patched: %v", recorder.patches)
-		}
-		if hc["tcp"] != nil || hc["http"] == nil || hc["http"].(map[string]any)["path"] != localHealthCheckPath || hc["targetPort"] != float64(31000) {
-			t.Errorf("healthCheck = %v, want HTTP %s on port 31000", hc, localHealthCheckPath)
-		}
-	})
+	}
 
 	t.Run("patches graph and removes stale listeners", func(t *testing.T) {
 		recorder := &sdkRecorder{

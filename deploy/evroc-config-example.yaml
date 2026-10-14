@@ -14,11 +14,12 @@
 #
 # Usage:
 #   1. Create a service account and credential for the CCM:
+#        export EVROC_PROJECT="$(evroc config current-project)"
 #        evroc iam serviceaccount create ccm-agent
 #        evroc iam serviceaccount credential create ccm-agent-key \
 #          --service-account ccm-agent
 #        evroc iam rolebinding assign \
-#          --principal "/iam/projects/<project-id>/serviceAccounts/ccm-agent" \
+#          --principal "/iam/projects/${EVROC_PROJECT}/serviceAccounts/ccm-agent" \
 #          --role /iam/roles/kubernetesCCMAgent
 #
 #      The credential's private key is printed only once, at creation.
@@ -41,9 +42,14 @@ auth:
   service_account_id: "ccm-agent"
   # The jwt-bearer signing key: a file path or a base64-encoded JWK.
   service_account_secret: "changeme"
+  # The OIDC token endpoint for the evroc identity platform.
+  # Required when overriding the default; staging and production use
+  # different realms.
+  # token_url: "https://authn.evroc.com/realms/evroc-customer/protocol/openid-connect/token"
 
 # api:
 #   base_url: "https://api.evroc.com"  # default
+
 
 context:
   organization: "my-org"

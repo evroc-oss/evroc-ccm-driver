@@ -246,6 +246,35 @@ func TestValidateService(t *testing.T) {
 			wantErr: "healthCheckNodePort",
 		},
 		{
+			name: "health check port naming a service port is supported",
+			mutate: func(s *v1.Service) {
+				s.Annotations = map[string]string{annotationHealthCheckPort: "http", annotationHealthCheckPath: "/healthz"}
+			},
+		},
+		{
+			name: "health check port not in spec.ports is rejected",
+			mutate: func(s *v1.Service) {
+				s.Annotations = map[string]string{annotationHealthCheckPort: "metrics"}
+			},
+			wantErr: "name or number of a port",
+		},
+		{
+			name: "relative health check path is rejected",
+			mutate: func(s *v1.Service) {
+				s.Annotations = map[string]string{annotationHealthCheckPath: "healthz"}
+			},
+			wantErr: "absolute path",
+		},
+		{
+			name: "health check annotations under local traffic policy are rejected",
+			mutate: func(s *v1.Service) {
+				s.Spec.ExternalTrafficPolicy = v1.ServiceExternalTrafficPolicyLocal
+				s.Spec.HealthCheckNodePort = 31000
+				s.Annotations = map[string]string{annotationHealthCheckPath: "/healthz"}
+			},
+			wantErr: "always health checks spec.healthCheckNodePort",
+		},
+		{
 			name: "client IP session affinity is rejected",
 			mutate: func(s *v1.Service) {
 				s.Spec.SessionAffinity = v1.ServiceAffinityClientIP
@@ -363,8 +392,27 @@ func TestEnsureLoadBalancer(t *testing.T) {
 		if _, err := lb.EnsureLoadBalancer(context.Background(), "cluster", service, testNodes("node-a")); err != nil {
 			t.Fatalf("EnsureLoadBalancer() error = %v", err)
 		}
-		if len(client.ensured) != 1 || client.ensured[0].HealthCheckNodePort != 31000 {
+		if len(client.ensured) != 1 || client.ensured[0].HealthCheckPort != 31000 || client.ensured[0].HealthCheckPath != localHealthCheckPath {
 			t.Errorf("health check node port was not passed through: %#v", client.ensured)
+		}
+	})
+
+	t.Run("health check annotations select the named port's node port", func(t *testing.T) {
+		service := testService("api", "default",
+			v1.ServicePort{Name: "web", Port: 8080, NodePort: 32080},
+			v1.ServicePort{Name: "health", Port: 8081, NodePort: 32081},
+		)
+		service.Annotations = map[string]string{annotationHealthCheckPort: "8081", annotationHealthCheckPath: "/ready", annotationHealthCheckHost: "health.example.com"}
+		client := &recordingLBClient{getErr: evroc.ErrNotFound, address: "203.0.113.3"}
+		lb := newTestLB(client, &recordingPublicIPs{})
+		lbName := lb.GetLoadBalancerName(context.Background(), "cluster", service)
+		lb.ips = &recordingPublicIPs{ip: testPublicIP(lb.publicIPName(lbName), "203.0.113.3")}
+
+		if _, err := lb.EnsureLoadBalancer(context.Background(), "cluster", service, testNodes("node-a")); err != nil {
+			t.Fatalf("EnsureLoadBalancer() error = %v", err)
+		}
+		if len(client.ensured) != 1 || client.ensured[0].HealthCheckPort != 32081 || client.ensured[0].HealthCheckPath != "/ready" || client.ensured[0].HealthCheckHost != "health.example.com" {
+			t.Errorf("health check annotations were not resolved: %#v", client.ensured)
 		}
 	})
 
@@ -597,4 +645,53 @@ func TestDeletionWaitsForManagedIP(t *testing.T) {
 	if err := lb.EnsureLoadBalancerDeleted(ctx, "cluster", service); err != nil {
 		t.Fatalf("cleanup did not complete after IP disappeared: %v", err)
 	}
+}
+
+func TestHealthCheckHostAnnotation(t *testing.T) {
+	for _, host := range []string{"", "localhost", "health.example.com", "192.0.2.10"} {
+		t.Run("accepts "+host, func(t *testing.T) {
+			service := testService("api", "default")
+			service.Annotations = map[string]string{annotationHealthCheckPath: "/healthz", annotationHealthCheckHost: host}
+			if err := validateService(service); err != nil {
+				t.Fatalf("validateService() error = %v", err)
+			}
+		})
+	}
+	for _, host := range []string{
+		"health.example.com:8081", "https://health.example.com", "health.example.com/path",
+		"health.example.com.", "HEALTH.example.com", "*.example.com", "bad_host",
+		" health.example.com", "health.example.com\r\nX-Injected: true", "[2001:db8::1]",
+		strings.Repeat("a", 254),
+	} {
+		t.Run("rejects "+host+" before allocating resources", func(t *testing.T) {
+			service := testService("api", "default")
+			service.Annotations = map[string]string{annotationHealthCheckPath: "/healthz", annotationHealthCheckHost: host}
+			client := &recordingLBClient{}
+			ips := &recordingPublicIPs{}
+			lb := newTestLB(client, ips)
+			_, err := lb.EnsureLoadBalancer(context.Background(), "cluster", service, testNodes("node-a"))
+			if err == nil || !strings.Contains(err.Error(), "without a scheme or port") {
+				t.Fatalf("EnsureLoadBalancer() error = %v", err)
+			}
+			if ips.created || len(client.ensured) != 0 {
+				t.Fatalf("invalid host allocated resources: public IP = %v, load balancers = %d", ips.created, len(client.ensured))
+			}
+		})
+	}
+	t.Run("requires HTTP path", func(t *testing.T) {
+		service := testService("api", "default")
+		service.Annotations = map[string]string{annotationHealthCheckHost: "health.example.com"}
+		if err := validateService(service); err == nil || !strings.Contains(err.Error(), "requires ccm.evroc.com/health-check-path") {
+			t.Fatalf("error = %v", err)
+		}
+	})
+	t.Run("rejects Local override", func(t *testing.T) {
+		service := testService("api", "default")
+		service.Spec.ExternalTrafficPolicy = v1.ServiceExternalTrafficPolicyLocal
+		service.Spec.HealthCheckNodePort = 31000
+		service.Annotations = map[string]string{annotationHealthCheckHost: "health.example.com"}
+		if err := validateService(service); err == nil || !strings.Contains(err.Error(), "always health checks") {
+			t.Fatalf("error = %v", err)
+		}
+	})
 }

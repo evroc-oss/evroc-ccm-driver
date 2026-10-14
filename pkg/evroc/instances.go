@@ -111,8 +111,7 @@ func (i *instances) InstanceMetadata(ctx context.Context, node *v1.Node) (*cloud
 		zone = *vm.Spec.Placement.Zone
 	}
 	if zone == "" {
-		i.logger.Warn("VM has no placement zone; node will not be labelled with a topology zone",
-			"node", name)
+		return nil, fmt.Errorf("VM %s has no placement zone; node will not be labelled with a topology zone", name)
 	}
 
 	// Build node addresses

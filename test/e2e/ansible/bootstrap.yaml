@@ -1,0 +1,460 @@
+---
+# One disposable VM, following evroc-csi-driver's local-image/k3s E2E workflow.
+# Optional extra vars: vm_name, subnet, security_group, ssh_user, vm_profile,
+# os_image, k3s_version, ccm_config_path. Uses the active evroc CLI project/profile.
+- name: Provision a disposable evroc VM and build CCM
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+    project_root: "{{ playbook_dir }}/../../.."
+    default_security_groups:
+      - default-allow-ssh
+      - default-allow-egress
+      - default-allow-intra-vpc
+  tasks:
+    - name: Require an SSH key
+      ansible.builtin.assert:
+        that:
+          - ssh_key is defined
+        fail_msg: Pass -e ssh_key=/path/to/key
+
+    - name: Set paths and resource names
+      ansible.builtin.set_fact:
+        e2e_name: "{{ vm_name | default('ccm-e2e-' ~ now(utc=true, fmt='%Y%m%d%H%M%S')) }}"
+        key_path: "{{ ssh_key | expanduser | realpath }}"
+
+    - name: Validate the VM name
+      ansible.builtin.assert:
+        that: e2e_name is match('^[a-z][a-z0-9-]{0,38}[a-z0-9]$')
+
+    - name: Read the public key
+      ansible.builtin.set_fact:
+        public_key: "{{ lookup('file', key_path if key_path.endswith('.pub') else key_path ~ '.pub') }}"
+      no_log: true
+
+    - name: Require an OpenSSH public key
+      ansible.builtin.assert:
+        that:
+          - public_key is match('^(ssh-|ecdsa-sha2-)[^ ]+ ')
+
+    - name: List subnets when no subnet was supplied
+      ansible.builtin.command:
+        argv: [evroc, networking, subnet, list, '-o', json]
+      register: default_subnets
+      changed_when: false
+      when: subnet is not defined
+
+    - name: Select the subnet
+      ansible.builtin.set_fact:
+        selected_subnet: "{{ subnet if subnet is defined else ((default_subnets.stdout | from_json)['items'] | selectattr('spec.ipv4CidrBlock', 'defined') | rejectattr('spec.ipv4CidrBlock', 'equalto', none) | rejectattr('spec.ipv4CidrBlock', 'equalto', '') | sort(attribute='metadata.id') | map(attribute='metadata.id') | first | default('')) }}"
+
+    - name: Require an existing subnet
+      ansible.builtin.assert:
+        that: selected_subnet | length > 0
+        fail_msg: No IPv4 subnet found; supply -e subnet=NAME.
+
+    - name: Read subnet placement
+      ansible.builtin.command:
+        argv: [evroc, networking, subnet, get, '{{ selected_subnet }}', '-o', json]
+      register: subnet_info
+      changed_when: false
+
+    - name: Set cluster artifact paths
+      ansible.builtin.set_fact:
+        zone: "{{ (subnet_info.stdout | from_json).spec.placement.zone }}"
+        ccm_state_dir: "/tmp/{{ e2e_name }}"
+        ccm_image: "evroc-ccm-e2e:{{ e2e_name }}"
+        ccm_config: "{{ ccm_config_path | expanduser | realpath if ccm_config_path is defined else '/tmp/' ~ e2e_name ~ '/config.yaml' }}"
+
+    - name: Check the stock security groups before provisioning
+      ansible.builtin.command:
+        argv: [evroc, networking, securitygroup, get, '{{ item }}', '-o', json]
+      loop: "{{ default_security_groups }}"
+      changed_when: false
+      when: security_group is not defined
+
+    - name: Select the VM security groups
+      ansible.builtin.set_fact:
+        selected_security_groups: "{{ security_group if security_group is defined else (default_security_groups + [e2e_name ~ '-api-sg']) | join(',') }}"
+
+    - name: Read the active CLI profile
+      ansible.builtin.set_fact:
+        cli_config: "{{ lookup('file', '~/.evroc/config.yaml') | from_yaml }}"
+      no_log: true
+
+    - name: Select its context and endpoints
+      ansible.builtin.set_fact:
+        cli_profile: "{{ cli_config.profiles[cli_config.currentProfile] }}"
+      no_log: true
+
+    - name: Create a new private artifact directory
+      ansible.builtin.command:
+        argv: [mkdir, '-m', '700', '{{ ccm_state_dir }}']
+      changed_when: true
+
+    - name: Build this checkout before creating cloud resources
+      ansible.builtin.command:
+        argv: [docker, build, '--platform', linux/amd64, '-t', '{{ ccm_image }}', '{{ project_root }}']
+      changed_when: true
+
+    - name: Record the resources for cleanup
+      ansible.builtin.copy:
+        dest: "{{ ccm_state_dir }}/resources.yaml"
+        mode: '0600'
+        content: |
+          context:
+            api: {{ cli_profile.apiURL | to_json }}
+            organization: {{ cli_profile.organization | to_json }}
+            project: {{ cli_profile.project | to_json }}
+            region: {{ cli_profile.region | to_json }}
+          vm: {{ e2e_name }}
+          disk: {{ e2e_name }}-boot
+          public_ip: {{ e2e_name }}-ip
+          subnet: {{ selected_subnet }}
+          zone: {{ zone }}
+          service_account: {{ e2e_name if ccm_config_path is not defined else 'not-created' }}
+          created_security_group: {{ e2e_name ~ '-api-sg' if security_group is not defined else 'not-created' }}
+          attached_security_groups: {{ selected_security_groups }}
+
+    - name: Show the cleanup command before provisioning
+      ansible.builtin.debug:
+        msg: 'ansible-playbook test/e2e/ansible/cleanup.yaml -e state_dir={{ ccm_state_dir }}'
+
+    - name: Create Kubernetes API access for the local test runner
+      when: security_group is not defined
+      block:
+        - name: Create the test API security group
+          ansible.builtin.command:
+            argv: [evroc, networking, securitygroup, create, '{{ e2e_name }}-api-sg', '--vpc', '{{ ((subnet_info.stdout | from_json).spec.vpcRef | split("/"))[-1] }}']
+          changed_when: true
+
+        - name: Allow access to the Kubernetes API
+          ansible.builtin.command:
+            argv: [evroc, networking, securitygroup, addrule, '{{ e2e_name }}-api-sg', '--name', kubernetes-api, '--direction', Ingress, '--protocol', TCP, '--port', '6443', '--remote-ip-or-cidr', '0.0.0.0/0']
+          changed_when: true
+
+    - name: Generate a temporary CCM identity and configuration
+      when: ccm_config_path is not defined
+      block:
+        - name: Create the CCM service account
+          ansible.builtin.command:
+            argv: [evroc, iam, serviceaccount, create, '{{ e2e_name }}']
+          changed_when: true
+
+        - name: Grant the CCM role
+          ansible.builtin.command:
+            argv: [evroc, iam, rolebinding, assign, '--principal', '/iam/projects/{{ cli_profile.project }}/serviceAccounts/{{ e2e_name }}', '--role', /iam/roles/kubernetesCCMAgent]
+          changed_when: true
+
+        - name: Create a credential valid for 48 hours
+          ansible.builtin.command:
+            argv: [evroc, iam, serviceaccount, credential, create, '{{ e2e_name }}-key', '--service-account', '{{ e2e_name }}', '--expires-in', 48h]
+          register: credential
+          no_log: true
+          changed_when: true
+
+        - name: Save the one-time credential privately
+          ansible.builtin.copy:
+            dest: "{{ ccm_state_dir }}/credential.txt"
+            content: "{{ credential.stdout }}"
+            mode: '0600'
+          no_log: true
+
+        - name: Write the CCM configuration
+          ansible.builtin.copy:
+            dest: "{{ ccm_config }}"
+            mode: '0600'
+            content: |
+              auth:
+                service_account_id: {{ e2e_name | to_json }}
+                service_account_secret: {{ credential.stdout_lines[-1] | to_json }}
+                token_url: {{ (cli_profile.issuerURL | regex_replace('/$', '') ~ '/protocol/openid-connect/token') | to_json }}
+              api:
+                base_url: {{ cli_profile.apiURL | to_json }}
+              context:
+                organization: {{ cli_profile.organization | to_json }}
+                project: {{ cli_profile.project | to_json }}
+                region: {{ cli_profile.region | to_json }}
+              ccm:
+                identifier: {{ e2e_name | to_json }}
+              loadbalancers:
+                stackType: ipv4-only
+                backendNetwork:
+                  vpcID: {{ ((subnet_info.stdout | from_json).spec.vpcRef | split('/'))[-1] | to_json }}
+                  subnets:
+                    - zone: {{ zone | to_json }}
+                      subnetID: {{ selected_subnet | to_json }}
+          no_log: true
+
+    - name: Create the boot disk
+      ansible.builtin.command:
+        argv: [evroc, compute, disk, create, '{{ e2e_name }}-boot', '--image', '{{ os_image | default("ubuntu.24-04.1") }}', '--size-amount', '30', '--size-unit', GB, '--zone', '{{ zone }}']
+      changed_when: true
+
+    - name: Create the VM public IP
+      ansible.builtin.command:
+        argv: [evroc, networking, publicip, create, '{{ e2e_name }}-ip']
+      changed_when: true
+
+    - name: Wait for the disk to become Ready
+      ansible.builtin.command:
+        argv: [evroc, compute, disk, get, '{{ e2e_name }}-boot', '-o', json]
+      register: disk
+      until: disk.rc == 0 and ((disk.stdout | from_json).status.conditions | default([]) | selectattr('type', 'equalto', 'Ready') | selectattr('status', 'equalto', 'True') | list | length) > 0
+      retries: 120
+      delay: 5
+      changed_when: false
+
+    - name: Wait for a public IPv4 address
+      ansible.builtin.command:
+        argv: [evroc, networking, publicip, get, '{{ e2e_name }}-ip', '-o', json]
+      register: public_ip
+      until: public_ip.rc == 0 and ((public_ip.stdout | from_json).status.publicIPv4Address | default('') | length) > 0
+      retries: 120
+      delay: 5
+      changed_when: false
+
+    - name: Create the VM with the supplied SSH key
+      ansible.builtin.command:
+        argv: "{{ ['evroc', 'compute', 'virtualmachine', 'create', e2e_name, '--zone', zone, '--subnet', selected_subnet, '--vm-virtual-resources-ref', vm_profile | default('a1a.s'), '--disk', e2e_name ~ '-boot', '--boot-from=true', '--public-ip', e2e_name ~ '-ip', '--ssh-authorized-key', public_key, '--stack-type', 'dual-stack', '--running=true', '--security-group', selected_security_groups] }}"
+      changed_when: true
+
+    - name: Add the new VM to the Ansible inventory
+      ansible.builtin.add_host:
+        name: "{{ e2e_name }}"
+        groups: k3s_servers
+        ansible_host: "{{ (public_ip.stdout | from_json).status.publicIPv4Address }}"
+        ansible_user: "{{ ssh_user | default('evroc-user') }}"
+        ansible_ssh_private_key_file: "{{ omit if key_path.endswith('.pub') else key_path }}"
+        ansible_ssh_common_args: "-o BatchMode=yes -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile={{ (ccm_state_dir ~ '/known_hosts') | quote }}"
+        ccm_state_dir: "{{ ccm_state_dir }}"
+        ccm_image: "{{ ccm_image }}"
+
+- name: Prepare the single-node CCM test cluster
+  hosts: k3s_servers
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Wait for SSH
+      ansible.builtin.wait_for_connection:
+        timeout: 600
+
+    - name: Wait for cloud-init
+      ansible.builtin.command: cloud-init status --wait
+      changed_when: false
+
+    - name: Read machine architecture
+      ansible.builtin.command: uname -m
+      register: architecture
+      changed_when: false
+
+    - name: Require an amd64 machine for the local image
+      ansible.builtin.assert:
+        that: architecture.stdout == 'x86_64'
+
+    - name: Check for an existing k3s installation
+      ansible.builtin.stat:
+        path: /etc/rancher/k3s/config.yaml
+      register: existing_config
+
+    - name: Check for existing cluster data
+      ansible.builtin.stat:
+        path: /var/lib/rancher/k3s/server
+      register: existing_cluster
+
+    - name: Require a fresh VM
+      ansible.builtin.assert:
+        that:
+          - not existing_config.stat.exists
+          - not existing_cluster.stat.exists
+        fail_msg: Refusing to overwrite an existing k3s cluster; use a fresh VM.
+
+    - name: Create private k3s configuration directory
+      ansible.builtin.file:
+        path: /etc/rancher/k3s
+        state: directory
+        mode: '0700'
+
+    - name: Configure external CCM before the node first registers
+      ansible.builtin.copy:
+        dest: /etc/rancher/k3s/config.yaml
+        mode: '0600'
+        content: |
+          node-name: {{ inventory_hostname | to_json }}
+          tls-san:
+            - {{ ansible_host | to_json }}
+          disable-cloud-controller: true
+          disable:
+            - servicelb
+            - traefik
+          kubelet-arg:
+            - cloud-provider=external
+          write-kubeconfig-mode: "0600"
+
+    - name: Download k3s installer
+      ansible.builtin.get_url:
+        url: https://get.k3s.io
+        dest: /etc/rancher/k3s/install.sh
+        mode: '0700'
+
+    - name: Install k3s
+      ansible.builtin.command: sh /etc/rancher/k3s/install.sh
+      environment:
+        INSTALL_K3S_CHANNEL: v1.35
+        INSTALL_K3S_VERSION: "{{ k3s_version | default('') }}"
+      changed_when: true
+
+    # Do not wait for node Ready here: CCM must remove the uninitialized taint.
+    - name: Wait for the API server
+      ansible.builtin.command: k3s kubectl get --raw=/readyz
+      register: api_ready
+      until: api_ready.rc == 0
+      retries: 60
+      delay: 5
+      changed_when: false
+
+    - name: Fetch the admin kubeconfig privately
+      ansible.builtin.fetch:
+        src: /etc/rancher/k3s/k3s.yaml
+        dest: "{{ ccm_state_dir }}/kubeconfig"
+        flat: true
+      no_log: true
+
+    - name: Protect the local kubeconfig
+      delegate_to: localhost
+      become: false
+      ansible.builtin.file:
+        path: "{{ ccm_state_dir }}/kubeconfig"
+        mode: '0600'
+
+    - name: Point kubeconfig to the VM address
+      delegate_to: localhost
+      become: false
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - "--kubeconfig={{ ccm_state_dir }}/kubeconfig"
+          - config
+          - set-cluster
+          - default
+          - "--server=https://{{ ansible_host }}:6443"
+      changed_when: true
+
+- name: Transfer the locally built CCM image to k3s
+  hosts: k3s_servers
+  gather_facts: false
+  tasks:
+    - name: Transfer and import the image
+      block:
+        - name: Save local image
+          delegate_to: localhost
+          ansible.builtin.command:
+            argv: [docker, save, '-o', '{{ ccm_state_dir }}/image.tar', '{{ ccm_image }}']
+          changed_when: true
+
+        - name: Copy image to the VM
+          ansible.builtin.copy:
+            src: "{{ ccm_state_dir }}/image.tar"
+            dest: /tmp/ccm-e2e-image.tar
+            mode: '0600'
+
+        - name: Import into the k3s runtime
+          become: true
+          ansible.builtin.command: k3s ctr images import /tmp/ccm-e2e-image.tar
+          changed_when: true
+      always:
+        - name: Remove local image archive
+          delegate_to: localhost
+          ansible.builtin.file:
+            path: "{{ ccm_state_dir }}/image.tar"
+            state: absent
+
+        - name: Remove remote image archive
+          ansible.builtin.file:
+            path: /tmp/ccm-e2e-image.tar
+            state: absent
+
+- name: Deploy CCM and wait for real node initialization
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  environment:
+    KUBECONFIG: "{{ ccm_state_dir }}/kubeconfig"
+  tasks:
+    - name: Create the CCM namespace
+      ansible.builtin.command: kubectl create namespace evroc-system
+      changed_when: true
+
+    - name: Install CCM credentials
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - create
+          - secret
+          - generic
+          - evroc-ccm-config
+          - '-n'
+          - evroc-system
+          - "--from-file=config.yaml={{ ccm_config }}"
+      no_log: true
+      changed_when: true
+
+    - name: Deploy the local chart
+      ansible.builtin.command:
+        argv:
+          - helm
+          - upgrade
+          - --install
+          - evroc-ccm
+          - "{{ playbook_dir }}/../../../chart"
+          - --namespace
+          - evroc-system
+          - --set
+          - evroc.existingConfigSecret=evroc-ccm-config
+          - --set
+          - ccm.image.repository=evroc-ccm-e2e
+          - --set-string
+          - "ccm.image.tag={{ e2e_name }}"
+          - --set
+          - ccm.image.pullPolicy=Never
+      changed_when: true
+
+    - name: Wait for CCM rollout
+      ansible.builtin.command: kubectl -n evroc-system rollout status deployment/evroc-ccm --timeout=5m
+      changed_when: false
+
+    - name: Wait for an evroc provider ID and removal of the uninitialized taint
+      ansible.builtin.command:
+        argv: [kubectl, get, node, '{{ groups.k3s_servers[0] }}', '-o', json]
+      register: node
+      until:
+        - node.rc == 0
+        - (node.stdout | from_json).spec.providerID | default('') is match('^evroc://')
+        - ((node.stdout | from_json).spec.taints | default([]) | selectattr('key', 'equalto', 'node.cloudprovider.kubernetes.io/uninitialized') | list | length) == 0
+      retries: 120
+      delay: 5
+      changed_when: false
+
+    - name: Wait for the node to become Ready
+      ansible.builtin.command:
+        argv: [kubectl, wait, '--for=condition=Ready', 'node/{{ groups.k3s_servers[0] }}', '--timeout=5m']
+      changed_when: false
+
+    - name: Create the local kubeconfig directory
+      ansible.builtin.file:
+        path: "{{ lookup('env', 'HOME') }}/.kube"
+        state: directory
+        mode: '0700'
+
+    - name: Save the ready cluster kubeconfig at a predictable path
+      ansible.builtin.copy:
+        src: "{{ ccm_state_dir }}/kubeconfig"
+        dest: "{{ lookup('env', 'HOME') }}/.kube/ccm-e2e-config"
+        mode: '0600'
+      no_log: true
+
+    - name: Show the test command
+      ansible.builtin.debug:
+        msg: 'KUBECONFIG="$HOME/.kube/ccm-e2e-config" ./test/e2e/run-e2e.sh'
