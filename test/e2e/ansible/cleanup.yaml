@@ -1,0 +1,72 @@
+---
+- name: Remove a disposable CCM test cluster
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  tasks:
+    - name: Require the bootstrap artifact directory
+      ansible.builtin.assert:
+        that: state_dir is defined
+        fail_msg: Pass -e state_dir=/tmp/ccm-e2e-TIMESTAMP from the bootstrap output.
+
+    - name: Read the resource inventory and CLI configuration
+      ansible.builtin.set_fact:
+        resources: "{{ lookup('file', state_dir ~ '/resources.yaml') | from_yaml }}"
+        cli_config: "{{ lookup('file', '~/.evroc/config.yaml') | from_yaml }}"
+      no_log: true
+
+    - name: Select the active CLI context
+      ansible.builtin.set_fact:
+        cli_profile: "{{ cli_config.profiles[cli_config.currentProfile] }}"
+      no_log: true
+
+    - name: Require the original cloud context
+      ansible.builtin.assert:
+        that:
+          - resources.context is defined
+          - resources.context.api == cli_profile.apiURL
+          - resources.context.organization == cli_profile.organization
+          - resources.context.project == cli_profile.project
+          - resources.context.region == cli_profile.region
+        fail_msg: Use the original evroc CLI context. Older inventories without context require manual cleanup.
+
+    - name: Check whether bootstrap fetched a kubeconfig
+      ansible.builtin.stat:
+        path: "{{ state_dir }}/kubeconfig"
+      register: kubeconfig
+
+    - name: Check whether the test VM still exists
+      ansible.builtin.command:
+        argv: [evroc, compute, virtualmachine, list, '-o', json]
+      register: virtualmachines
+      changed_when: false
+
+    # Keep CCM alive until its finalizers have released the cloud resources.
+    # Failure here deliberately preserves the VM for diagnosis and retry.
+    - name: Delete remaining test Services and wait for load-balancer cleanup
+      ansible.builtin.command:
+        argv: [kubectl, '--kubeconfig={{ state_dir }}/kubeconfig', '--request-timeout=30s', '-n', default, delete, service, e2e-nodeport, e2e-lb, e2e-lb-healthcheck, e2e-lb-delete, e2e-lb-internal, '--ignore-not-found', '--wait=true', '--timeout=10m']
+      when:
+        - kubeconfig.stat.exists
+        - resources.vm in ((virtualmachines.stdout | from_json)['items'] | map(attribute='metadata.id') | list)
+      register: service_cleanup
+      changed_when: "'deleted' in service_cleanup.stdout"
+
+    - name: Delete recorded cloud resources in dependency order
+      ansible.builtin.include_tasks: delete-resource.yaml
+      loop:
+        - {command: [compute, virtualmachine], name: '{{ resources.vm }}'}
+        - {command: [compute, disk], name: '{{ resources.disk }}'}
+        - {command: [networking, publicip], name: '{{ resources.public_ip }}'}
+        - {command: [networking, securitygroup], name: '{{ resources.created_security_group | default("not-created") }}'}
+        - {command: [iam, serviceaccount], name: '{{ resources.service_account }}'}
+      loop_control:
+        loop_var: resource
+        label: '{{ resource.name }}'
+      when: resource.name != 'not-created'
+
+    - name: Report cleanup completion
+      ansible.builtin.debug:
+        msg: 'Cloud cleanup complete. Local artifacts remain in {{ state_dir }}; the test kubeconfig is no longer usable.'

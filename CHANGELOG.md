@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Add `ccm.evroc.com/health-check-host` to override the HTTP health-check Host header, leaving the default to the platform when omitted.
+
+## [0.3.2] - 2026-10-12
+
+- Add `ccm.evroc.com/health-check-port` and `ccm.evroc.com/health-check-path` to health check a dedicated Service port and HTTP path.
+
 ## [0.3.1] - 2026-10-07
 
 - Build the image without a GitHub token and with Go checksum database verification enabled.
@@ -38,7 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial version.
 
-[Unreleased]: https://github.com/evroc-oss/evroc-ccm-driver/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/evroc-oss/evroc-ccm-driver/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.3.2
 [0.1.2]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.1.2
 [0.1.3]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.1.3
 [0.2.0]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.2.0
