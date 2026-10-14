@@ -271,9 +271,9 @@ func TestInstanceMetadataAddresses(t *testing.T) {
 func TestInstanceMetadataMissingZone(t *testing.T) {
 	vm := testVM()
 	vm.Spec.Placement.Zone = nil
-	got, err := testInstances(&mockVMGetter{vm: vm}).InstanceMetadata(context.Background(), testNode("my-vm"))
-	if err != nil || got.Zone != "" {
-		t.Errorf("InstanceMetadata() zone = %q, error = %v; want empty zone", got.Zone, err)
+	_, err := testInstances(&mockVMGetter{vm: vm}).InstanceMetadata(context.Background(), testNode("my-vm"))
+	if err == nil {
+		t.Fatal("InstanceMetadata() error = nil; want error for missing placement zone")
 	}
 }
 

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-10-14
+
+- Add `ccm.evroc.com/health-check-host` to override the HTTP health-check Host header, leaving the default to the platform when omitted.
+- CCM `InstanceMetadata` interface now errors if a zone is not found for a VM
+- CCM controller now only toleratres a smaller number of taints, broadly in line with the [kubernetes guidelines](https://kubernetes.io/blog/2025/02/14/cloud-controller-manager-chicken-egg-problem/#our-recommendations)
+
+## [0.3.2] - 2026-10-12
+
+- Add `ccm.evroc.com/health-check-port` and `ccm.evroc.com/health-check-path` to health check a dedicated Service port and HTTP path.
+
 ## [0.3.1] - 2026-10-07
 
 - Build the image without a GitHub token and with Go checksum database verification enabled.
@@ -38,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial version.
 
-[Unreleased]: https://github.com/evroc-oss/evroc-ccm-driver/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/evroc-oss/evroc-ccm-driver/compare/v0.3.3...HEAD
 [0.1.2]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.1.2
 [0.1.3]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.1.3
 [0.2.0]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.2.0
@@ -46,3 +56,5 @@ Initial version.
 [0.2.2]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.2.2
 [0.3.0]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.3.0
 [0.3.1]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.3.1
+[0.3.2]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.3.2
+[0.3.3]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.3.3

@@ -6,10 +6,10 @@ metadata:
   name: evroc-ccm
   namespace: evroc-system
   labels:
-    helm.sh/chart: evroc-ccm-0.3.1
+    helm.sh/chart: evroc-ccm-0.3.3
     app.kubernetes.io/name: evroc-ccm
     app.kubernetes.io/instance: evroc-ccm
-    app.kubernetes.io/version: "0.3.1"
+    app.kubernetes.io/version: "0.3.3"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: evroc
 ---
@@ -19,10 +19,10 @@ kind: ClusterRole
 metadata:
   name: evroc-ccm
   labels:
-    helm.sh/chart: evroc-ccm-0.3.1
+    helm.sh/chart: evroc-ccm-0.3.3
     app.kubernetes.io/name: evroc-ccm
     app.kubernetes.io/instance: evroc-ccm
-    app.kubernetes.io/version: "0.3.1"
+    app.kubernetes.io/version: "0.3.3"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: evroc
 rules:
@@ -58,10 +58,10 @@ kind: ClusterRoleBinding
 metadata:
   name: evroc-ccm
   labels:
-    helm.sh/chart: evroc-ccm-0.3.1
+    helm.sh/chart: evroc-ccm-0.3.3
     app.kubernetes.io/name: evroc-ccm
     app.kubernetes.io/instance: evroc-ccm
-    app.kubernetes.io/version: "0.3.1"
+    app.kubernetes.io/version: "0.3.3"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: evroc
 roleRef:
@@ -85,10 +85,10 @@ metadata:
   name: evroc-ccm-controller-accounts
   namespace: kube-system
   labels:
-    helm.sh/chart: evroc-ccm-0.3.1
+    helm.sh/chart: evroc-ccm-0.3.3
     app.kubernetes.io/name: evroc-ccm
     app.kubernetes.io/instance: evroc-ccm
-    app.kubernetes.io/version: "0.3.1"
+    app.kubernetes.io/version: "0.3.3"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: evroc
 rules:
@@ -111,10 +111,10 @@ metadata:
   name: evroc-ccm-controller-accounts
   namespace: kube-system
   labels:
-    helm.sh/chart: evroc-ccm-0.3.1
+    helm.sh/chart: evroc-ccm-0.3.3
     app.kubernetes.io/name: evroc-ccm
     app.kubernetes.io/instance: evroc-ccm
-    app.kubernetes.io/version: "0.3.1"
+    app.kubernetes.io/version: "0.3.3"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: evroc
 roleRef:
@@ -133,10 +133,10 @@ metadata:
   name: evroc-ccm
   namespace: evroc-system
   labels:
-    helm.sh/chart: evroc-ccm-0.3.1
+    helm.sh/chart: evroc-ccm-0.3.3
     app.kubernetes.io/name: evroc-ccm
     app.kubernetes.io/instance: evroc-ccm
-    app.kubernetes.io/version: "0.3.1"
+    app.kubernetes.io/version: "0.3.3"
     app.kubernetes.io/managed-by: Helm
     app.kubernetes.io/part-of: evroc
 spec:
@@ -148,10 +148,10 @@ spec:
   template:
     metadata:
       labels:
-        helm.sh/chart: evroc-ccm-0.3.1
+        helm.sh/chart: evroc-ccm-0.3.3
         app.kubernetes.io/name: evroc-ccm
         app.kubernetes.io/instance: evroc-ccm
-        app.kubernetes.io/version: "0.3.1"
+        app.kubernetes.io/version: "0.3.3"
         app.kubernetes.io/managed-by: Helm
         app.kubernetes.io/part-of: evroc
     spec:
@@ -173,7 +173,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: evroc-ccm
-          image: "ghcr.io/evroc-oss/evroc-ccm-driver:v0.3.1"
+          image: "ghcr.io/evroc-oss/evroc-ccm-driver:v0.3.3"
           imagePullPolicy: IfNotPresent
           args:
             - --cloud-provider=evroc
@@ -205,9 +205,35 @@ spec:
           secret:
             secretName: evroc-ccm-config
       tolerations:
-        # The CCM must tolerate every taint so it can initialize nodes during
-        # cluster bootstrap, before other workloads (including DNS) can run.
-        - operator: Exists
+        # The CCM must tolerate the 'uninitialized' snd 'not-ready' taint so it can initialize
+        # nodes during cluster bootstrap, before other workloads (including
+        # DNS) can run. It also needs to run on control-plane nodes.
+        # It should NOT tolerate node.kubernetes.io/unschedulable, otherwise a drain
+        # schedules the replacement pod back onto the cordoned node and deadlocks the drain.
+        # See https://kubernetes.io/blog/2025/02/14/cloud-controller-manager-chicken-egg-problem/#our-recommendations
+        # Advice 4 for why these are chosen.
+        - effect: NoSchedule
+          key: node-role.kubernetes.io/master
+          operator: Exists
+        - effect: NoExecute
+          key: node.kubernetes.io/unreachable
+          operator: Exists
+          tolerationSeconds: 120
+        - effect: NoExecute
+          key: node.kubernetes.io/not-ready
+          operator: Exists
+          tolerationSeconds: 120
+        - effect: NoSchedule
+          key: node.cloudprovider.kubernetes.io/uninitialized
+          operator: Exists
+        - effect: NoSchedule
+          key: node.kubernetes.io/not-ready
+          operator: Exists
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+        - key: CriticalAddonsOnly
+          operator: Exists
       affinity:
         nodeAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:

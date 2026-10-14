@@ -51,12 +51,18 @@ type lbEnsureOptions struct {
 	// backends can recover the client's address. Off unless the service opts in.
 	ProxyProtocol bool
 
-	// HealthCheckNodePort, when non-zero, switches every backend service to an
-	// HTTP health check of kube-proxy's /healthz on this node port instead of a
-	// TCP check of the traffic port. Set for externalTrafficPolicy: Local, where
-	// kube-proxy answers 200 only on nodes that have a local endpoint, so the
-	// load balancer stops sending traffic to nodes that would drop it.
-	HealthCheckNodePort int32
+	// HealthCheckPort, when non-zero, is the node port every backend service
+	// health checks instead of its traffic port. HealthCheckPath, when set,
+	// makes the check an HTTP GET of that path instead of a TCP connect. Both
+	// are set for externalTrafficPolicy: Local, where kube-proxy answers 200
+	// on /healthz of the healthCheckNodePort only on nodes that have a local
+	// endpoint, so the load balancer stops sending traffic to nodes that would
+	// drop it. Otherwise they come from the health check annotations.
+	HealthCheckPort int32
+	HealthCheckPath string
+
+	// HealthCheckHost overrides the HTTP Host header. Empty uses the platform default.
+	HealthCheckHost string
 
 	// BackendStackType is the cluster's IP stack. When "ipv6-only" the backend
 	// services select IPv6 so the load balancer can reach backends that have no
@@ -97,16 +103,20 @@ func lbEnsure(ctx context.Context, client *loadbalancer.Client, opts lbEnsureOpt
 			WithLabels(opts.Owner.labels()).
 			WithPort(l.BackendPort).
 			WithBackendPoolRef(client.BackendPoolRef(poolName))
-		if opts.HealthCheckNodePort != 0 {
-			svcBuilder = svcBuilder.WithHTTPHealthCheck(localHealthCheckPath)
+		if opts.HealthCheckPath != "" {
+			svcBuilder = svcBuilder.WithHTTPHealthCheck(opts.HealthCheckPath)
 		} else {
 			svcBuilder = svcBuilder.WithTCPHealthCheck()
 		}
 		svcReq := svcBuilder.Build()
+		if opts.HealthCheckHost != "" && svcReq.Spec.HealthCheck.Http != nil {
+			host := opts.HealthCheckHost
+			svcReq.Spec.HealthCheck.Http.Host = &host
+		}
 		// The builder has no target-port setter, so it is applied to the built
 		// request directly.
-		if opts.HealthCheckNodePort != 0 {
-			hcPort := opts.HealthCheckNodePort
+		if opts.HealthCheckPort != 0 {
+			hcPort := opts.HealthCheckPort
 			svcReq.Spec.HealthCheck.TargetPort = &hcPort
 		}
 		proxy := opts.ProxyProtocol
@@ -122,10 +132,19 @@ func lbEnsure(ctx context.Context, client *loadbalancer.Client, opts lbEnsureOpt
 			if err := owner.checkLB(ctx, client, "backendService", svcName); err != nil {
 				return nil, err
 			}
+			// Clear a removed Host override instead of retaining it in the merge patch.
+			hc := svcReq.Spec.HealthCheck
+			var hcPatch any = hc
+			if hc.Http != nil {
+				hcPatch = map[string]any{
+					"http":       map[string]any{"path": hc.Http.Path, "host": hc.Http.Host},
+					"targetPort": hc.TargetPort,
+				}
+			}
 			_, err = client.BackendServices().Patch(ctx, svcName, map[string]any{
 				"spec": map[string]any{
 					"backendPoolRef":      svcReq.Spec.BackendPoolRef,
-					"healthCheck":         svcReq.Spec.HealthCheck,
+					"healthCheck":         hcPatch,
 					"ipProtocolSelection": svcReq.Spec.IpProtocolSelection,
 					"port":                svcReq.Spec.Port,
 					"proxyProtocol":       svcReq.Spec.ProxyProtocol,

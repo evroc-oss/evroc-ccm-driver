@@ -7,6 +7,8 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -153,6 +155,141 @@ func TestLoadBalancerService(t *testing.T) {
 	if net.ParseIP(ingressIP).To4() == nil {
 		t.Errorf("ingress %q is not IPv4; the evroc load balancer frontend is always IPv4", ingressIP)
 	}
+}
+
+// deployHealthCheckBackend keeps traffic and health on separate listeners and
+// records the Host and response status of the platform's actual HTTP probes.
+func deployHealthCheckBackend(ctx context.Context, f *framework.Framework, name string) map[string]string {
+	f.T.Helper()
+	config := `events {}
+http {
+    log_format probe '$server_port $request_uri $http_host $status';
+    access_log /dev/stdout probe;
+    server {
+        listen 8080;
+        location / { return 200 "traffic-ok\n"; }
+    }
+    server {
+        listen 8081;
+        if ($http_host != "health.example.test") { return 400; }
+        location = /healthz { return 200 "healthy\n"; }
+        location / { return 404; }
+    }
+}`
+	_, err := f.ClientSet.CoreV1().ConfigMaps("default").Create(ctx, &v1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Data:       map[string]string{"nginx.conf": config},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		f.T.Fatalf("create health-check config: %v", err)
+	}
+	f.T.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		_ = f.ClientSet.CoreV1().ConfigMaps("default").Delete(cleanupCtx, name, metav1.DeleteOptions{})
+	})
+	labels := map[string]string{"app": name}
+	replicas := int32(1)
+	_, err = f.ClientSet.AppsV1().Deployments("default").Create(ctx, &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: &replicas,
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: v1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: labels},
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{{
+						Name: "nginx", Image: "nginx:1.28-alpine",
+						VolumeMounts: []v1.VolumeMount{{Name: "config", MountPath: "/etc/nginx/nginx.conf", SubPath: "nginx.conf", ReadOnly: true}},
+					}},
+					Volumes: []v1.Volume{{Name: "config", VolumeSource: v1.VolumeSource{ConfigMap: &v1.ConfigMapVolumeSource{LocalObjectReference: v1.LocalObjectReference{Name: name}}}}},
+				},
+			},
+		},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		f.T.Fatalf("create health-check deployment: %v", err)
+	}
+	f.T.Cleanup(func() {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
+		_ = f.ClientSet.AppsV1().Deployments("default").Delete(cleanupCtx, name, metav1.DeleteOptions{})
+	})
+	f.WaitFor(ctx, 3*time.Minute, "health-check backend to become available", func(ctx context.Context) bool {
+		d, err := f.ClientSet.AppsV1().Deployments("default").Get(ctx, name, metav1.GetOptions{})
+		return err == nil && d.Status.ReadyReplicas >= 1
+	})
+	return labels
+}
+
+// TestLoadBalancerHealthCheckAnnotations verifies that real HTTP probes reach
+// a separate health listener with a valid Host. Frontend traffic alone cannot
+// prove this: the platform forwards to unhealthy backends when all are unhealthy.
+func TestLoadBalancerHealthCheckAnnotations(t *testing.T) {
+	f := framework.New(t)
+	ctx := context.Background()
+
+	labels := deployHealthCheckBackend(ctx, f, "e2e-lb-healthcheck")
+	createService(ctx, f, &v1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "e2e-lb-healthcheck",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"ccm.evroc.com/health-check-port": "health",
+				"ccm.evroc.com/health-check-path": "/healthz",
+				"ccm.evroc.com/health-check-host": "health.example.test",
+			},
+		},
+		Spec: v1.ServiceSpec{
+			Type:     v1.ServiceTypeLoadBalancer,
+			Selector: labels,
+			Ports: []v1.ServicePort{
+				{Name: "http", Port: 80, TargetPort: intstr.FromInt32(8080)},
+				{Name: "health", Port: 8081, TargetPort: intstr.FromInt32(8081)},
+			},
+		},
+	})
+
+	var ingressIP string
+	f.WaitFor(ctx, lbProvisionTimeout, "load balancer to publish an ingress IP", func(ctx context.Context) bool {
+		current, err := f.ClientSet.CoreV1().Services("default").Get(ctx, "e2e-lb-healthcheck", metav1.GetOptions{})
+		if err != nil {
+			return false
+		}
+		for _, ing := range current.Status.LoadBalancer.Ingress {
+			if ing.IP != "" {
+				ingressIP = ing.IP
+				return true
+			}
+		}
+		return false
+	})
+	t.Logf("load balancer ingress IP: %s", ingressIP)
+
+	// Only the load balancer sends requests to /healthz. Check actual server
+	// responses, so an invalid Host or a TCP-only check cannot pass through
+	// the platform's all-unhealthy fallback.
+	f.WaitFor(ctx, 3*time.Minute, "HTTP probes with the annotated Host to succeed on the health listener", func(ctx context.Context) bool {
+		pods, err := f.ClientSet.CoreV1().Pods("default").List(ctx, metav1.ListOptions{LabelSelector: "app=e2e-lb-healthcheck"})
+		if err != nil || len(pods.Items) != 1 {
+			return false
+		}
+		logs, err := f.ClientSet.CoreV1().Pods("default").GetLogs(pods.Items[0].Name, &v1.PodLogOptions{Container: "nginx"}).DoRaw(ctx)
+		if err != nil {
+			return false
+		}
+		return strings.Count(string(logs), "8081 /healthz health.example.test 200\n") >= 2
+	})
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	f.WaitFor(ctx, 3*time.Minute, "the frontend to serve traffic from a backend passing the annotated check", func(ctx context.Context) bool {
+		resp, err := client.Get("http://" + ingressIP + "/hostname")
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	})
 }
 
 // TestLoadBalancerDeletionCompletes checks that the CCM finishes its teardown

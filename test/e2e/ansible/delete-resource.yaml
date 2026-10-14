@@ -1,0 +1,21 @@
+---
+- name: Check whether the resource exists
+  ansible.builtin.command:
+    argv: "{{ ['evroc'] + resource.command + ['list', '-o', 'json'] }}"
+  register: resource_list
+  changed_when: false
+
+- name: Delete the resource if present
+  ansible.builtin.command:
+    argv: "{{ ['evroc'] + resource.command + ['delete', resource.name, '--force'] }}"
+  when: resource.name in ((resource_list.stdout | from_json)['items'] | map(attribute='metadata.id') | list)
+  changed_when: true
+
+- name: Wait for deletion before removing dependent resources
+  ansible.builtin.command:
+    argv: "{{ ['evroc'] + resource.command + ['list', '-o', 'json'] }}"
+  register: remaining_resources
+  until: resource.name not in ((remaining_resources.stdout | from_json)['items'] | map(attribute='metadata.id') | list)
+  retries: 120
+  delay: 5
+  changed_when: false

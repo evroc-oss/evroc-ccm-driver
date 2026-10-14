@@ -1,4 +1,4 @@
-# Static manifests
+# Regenerating the static manifest
 
 `evroc-ccm.yaml` is generated from the Helm chart in `../chart`; do not edit it
 directly. It uses the chart defaults with these installation-specific inputs:
@@ -7,7 +7,7 @@ directly. It uses the chart defaults with these installation-specific inputs:
 - namespace: `evroc-system`
 - existing config Secret: `evroc-ccm-config`
 
-Regenerate it after changing the chart:
+Regenerate after changing the chart:
 
 ```bash
 make generate-manifest
@@ -17,5 +17,8 @@ make generate-manifest
 This check also runs in CI so chart changes cannot leave the static manifest
 out of date.
 
-`evroc-config-example.yaml` is an example configuration Secret and is maintained
+`evroc-config-example.yaml` is an example configuration file and is maintained
 separately.
+
+For full deployment instructions, see
+[`docs/deploying-ccm.md`](../docs/deploying-ccm.md).

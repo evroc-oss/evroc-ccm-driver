@@ -5,8 +5,11 @@ package evroc
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 const (
@@ -16,6 +19,17 @@ const (
 
 	// annotationProxyProtocol enables PROXY protocol on the backend services.
 	annotationProxyProtocol = "ccm.evroc.com/proxy-protocol"
+
+	// annotationHealthCheckPort names a Service port (by name or number) whose
+	// node port the load balancer health checks instead of each traffic port.
+	annotationHealthCheckPort = "ccm.evroc.com/health-check-port"
+
+	// annotationHealthCheckPath switches the health check from TCP to an HTTP
+	// GET of this path.
+	annotationHealthCheckPath = "ccm.evroc.com/health-check-path"
+
+	// annotationHealthCheckHost overrides the HTTP probe Host header.
+	annotationHealthCheckHost = "ccm.evroc.com/health-check-host"
 
 	// lbTypeExternal is a load balancer reachable from outside the VPC through
 	// a public IP. This is the default.
@@ -51,6 +65,9 @@ func validateService(service *v1.Service) error {
 		return err
 	}
 	if err := validateTrafficPolicy(service); err != nil {
+		return err
+	}
+	if err := validateHealthCheck(service); err != nil {
 		return err
 	}
 	if err := validateSessionAffinity(service); err != nil {
@@ -119,13 +136,74 @@ func validateTrafficPolicy(service *v1.Service) error {
 	return nil
 }
 
-// localHealthCheckNodePort returns the port the load balancer must health
-// check under externalTrafficPolicy: Local, or 0 for Cluster.
-func localHealthCheckNodePort(service *v1.Service) int32 {
-	if service.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyLocal {
-		return service.Spec.HealthCheckNodePort
+// validateHealthCheck checks the health check annotations. Under
+// externalTrafficPolicy: Local the check must stay on kube-proxy's
+// healthCheckNodePort, or nodes without a local pod would keep receiving
+// traffic, so the annotations are rejected there rather than ignored.
+func validateHealthCheck(service *v1.Service) error {
+	port, path := service.Annotations[annotationHealthCheckPort], service.Annotations[annotationHealthCheckPath]
+	host := service.Annotations[annotationHealthCheckHost]
+	if port == "" && path == "" && host == "" {
+		return nil
 	}
-	return 0
+	if service.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyLocal {
+		return &unsupportedServiceError{
+			field:  fmt.Sprintf("annotation %s", annotationHealthCheckPort),
+			reason: "externalTrafficPolicy: Local always health checks spec.healthCheckNodePort",
+		}
+	}
+	if host != "" && path == "" {
+		return &unsupportedServiceError{
+			field:  fmt.Sprintf("annotation %s", annotationHealthCheckHost),
+			reason: "requires ccm.evroc.com/health-check-path for an HTTP health check",
+		}
+	}
+	// Health-check hosts must follow the DNS1123 subdomain format (max 253
+	// characters), without a scheme or port.
+	if host != "" && len(validation.IsDNS1123Subdomain(host)) != 0 {
+		return &unsupportedServiceError{
+			field:  fmt.Sprintf("annotation %s=%s", annotationHealthCheckHost, host),
+			reason: "must be a lowercase hostname or IPv4 address without a scheme or port",
+		}
+	}
+	if port != "" && findServicePort(service, port) == nil {
+		return &unsupportedServiceError{
+			field:  fmt.Sprintf("annotation %s=%s", annotationHealthCheckPort, port),
+			reason: "must be the name or number of a port in spec.ports",
+		}
+	}
+	if path != "" && !strings.HasPrefix(path, "/") {
+		return &unsupportedServiceError{
+			field:  fmt.Sprintf("annotation %s=%s", annotationHealthCheckPath, path),
+			reason: "must be an absolute path",
+		}
+	}
+	return nil
+}
+
+// findServicePort returns the Service port matching the given name or number.
+func findServicePort(service *v1.Service, nameOrNumber string) *v1.ServicePort {
+	for i := range service.Spec.Ports {
+		p := &service.Spec.Ports[i]
+		if p.Name == nameOrNumber || strconv.Itoa(int(p.Port)) == nameOrNumber {
+			return p
+		}
+	}
+	return nil
+}
+
+// healthCheck returns the node port and HTTP path the load balancer must
+// health check, or 0 and "" for a TCP check of each traffic port. Under
+// externalTrafficPolicy: Local this is kube-proxy's healthCheckNodePort;
+// otherwise it comes from the health check annotations.
+func healthCheck(service *v1.Service) (port int32, path string) {
+	if service.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyLocal {
+		return service.Spec.HealthCheckNodePort, localHealthCheckPath
+	}
+	if p := findServicePort(service, service.Annotations[annotationHealthCheckPort]); p != nil {
+		port = p.NodePort
+	}
+	return port, service.Annotations[annotationHealthCheckPath]
 }
 
 func validateSessionAffinity(service *v1.Service) error {
