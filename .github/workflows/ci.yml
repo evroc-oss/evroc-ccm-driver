@@ -31,10 +31,7 @@ jobs:
           go-version: "1.27.3"
       - uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
         with:
-          # v2.15.0 is built with go1.27.0. Older prebuilt binaries (v2.8.0 is
-          # built with go1.25) panic with "file requires newer Go version" when
-          # the setup-go toolchain is newer than the binary's Go.
-          version: v2.15.0
+          version: v2.8.0
           args: --timeout=5m
 
   test:
