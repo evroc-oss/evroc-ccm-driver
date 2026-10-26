@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: "1.25"
+          go-version: "1.27.3"
       - name: Verify modules are tidy
         run: make verify-tidy
 
@@ -28,10 +28,13 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: "1.25"
+          go-version: "1.27.3"
       - uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
         with:
-          version: v2.8.0
+          # v2.15.0 is built with go1.27.0. Older prebuilt binaries (v2.8.0 is
+          # built with go1.25) panic with "file requires newer Go version" when
+          # the setup-go toolchain is newer than the binary's Go.
+          version: v2.15.0
           args: --timeout=5m
 
   test:
@@ -41,7 +44,7 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: "1.25"
+          go-version: "1.27.3"
       - name: Run tests
         run: make test
       - name: Upload coverage report
@@ -72,6 +75,6 @@ jobs:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
-          go-version: "1.25"
+          go-version: "1.27.3"
       - name: Build
         run: make build
