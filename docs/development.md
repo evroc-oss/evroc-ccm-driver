@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- Go 1.25+
+- Go 1.27.3+ (crypto/x509 CVE-2026-111943 fix; rebuild required)
 - Docker
 - golangci-lint v2.8.0+
 

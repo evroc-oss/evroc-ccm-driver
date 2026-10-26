@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-10-26
+
+### Security
+
+- Fix CVE-2026-111943: build with Go 1.27.3, whose `crypto/x509` rejects certificate chains through the compromised eMudhra intermediate CAs.
+- Refresh the pinned Alpine 3.21 base image (3.21.9) so the shipped CA trust store drops the compromised eMudhra roots (`ca-certificates` 20261020-r0).
+
 ## [0.3.3] - 2026-10-14
 
 - Add `ccm.evroc.com/health-check-host` to override the HTTP health-check Host header, leaving the default to the platform when omitted.
@@ -48,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial version.
 
-[Unreleased]: https://github.com/evroc-oss/evroc-ccm-driver/compare/v0.3.3...HEAD
+[Unreleased]: https://github.com/evroc-oss/evroc-ccm-driver/compare/v0.3.4...HEAD
 [0.1.2]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.1.2
 [0.1.3]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.1.3
 [0.2.0]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.2.0
@@ -58,3 +65,4 @@ Initial version.
 [0.3.1]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.3.1
 [0.3.2]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.3.2
 [0.3.3]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.3.3
+[0.3.4]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.3.4
