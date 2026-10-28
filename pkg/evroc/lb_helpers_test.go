@@ -169,6 +169,87 @@ func TestLBEnsureSDKContract(t *testing.T) {
 		BackendRefs: []string{"/compute/projects/p/regions/r/virtualMachines/node-a"},
 	}
 
+	t.Run("health-check PROXY follows policy on create and update", func(t *testing.T) {
+		for _, tc := range []struct {
+			name     string
+			conflict bool
+			local    bool
+		}{
+			{
+				name:  "create Local",
+				local: true,
+			},
+			{
+				name: "create Cluster",
+			},
+			{
+				name:     "update Local",
+				conflict: true,
+				local:    true,
+			},
+			{
+				name:     "update Cluster",
+				conflict: true,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				r := &sdkRecorder{
+					conflict: tc.conflict,
+					lbName:   lbName,
+					listener: listener,
+					posts:    map[string]map[string]any{},
+					patches:  map[string]map[string]any{},
+					deletes:  map[string]bool{},
+				}
+				o := opts
+				o.ProxyProtocol = true
+				o.HealthCheckDisableProxyProtocol = tc.local
+				if tc.local {
+					o.HealthCheckPath = localHealthCheckPath
+					o.HealthCheckPort = 31000
+				}
+				if _, err := lbEnsure(context.Background(), testSDKLBClient(t, r), o); err != nil {
+					t.Fatal(err)
+				}
+				requests := r.posts
+				suffix := "/backendServices"
+				if tc.conflict {
+					requests = r.patches
+					suffix = "/backendServices/" + lbBackendServiceName(lbName, listener)
+				}
+				found := false
+				for path, body := range requests {
+					if !strings.HasSuffix(path, suffix) {
+						continue
+					}
+					found = true
+					spec := body["spec"].(map[string]any)
+					hc := spec["healthCheck"].(map[string]any)
+					if spec["proxyProtocol"] != true || hc["disableProxyProtocol"] != tc.local {
+						t.Fatalf("local=%v patch=%v: unexpected PROXY settings: %v", tc.local, tc.conflict, spec)
+					}
+					if tc.local {
+						httpCheck, ok := hc["http"].(map[string]any)
+						if !ok || httpCheck["path"] != localHealthCheckPath || hc["targetPort"] != float64(31000) {
+							t.Fatalf("Local check must use HTTP %s on port 31000: %v", localHealthCheckPath, hc)
+						}
+					} else if tc.conflict {
+						for _, key := range []string{"http", "targetPort"} {
+							if value, exists := hc[key]; !exists || value != nil {
+								t.Fatalf("Cluster patch must clear %s: %v", key, hc)
+							}
+						}
+					} else if hc["http"] != nil || hc["targetPort"] != nil {
+						t.Fatalf("Cluster create must not set HTTP or target port overrides: %v", hc)
+					}
+				}
+				if !found {
+					t.Fatal("missing backend service request")
+				}
+			})
+		}
+	})
+
 	t.Run("creates complete resource graph", func(t *testing.T) {
 		recorder := &sdkRecorder{
 			lbName:   lbName,
@@ -195,9 +276,12 @@ func TestLBEnsureSDKContract(t *testing.T) {
 			}
 			t.Run(name+"/"+host, func(t *testing.T) {
 				recorder := &sdkRecorder{
-					conflict: conflict, lbName: lbName, listener: listener,
-					posts:   map[string]map[string]any{},
-					patches: map[string]map[string]any{}, deletes: map[string]bool{},
+					conflict: conflict,
+					lbName:   lbName,
+					listener: listener,
+					posts:    map[string]map[string]any{},
+					patches:  map[string]map[string]any{},
+					deletes:  map[string]bool{},
 				}
 				localOpts := opts
 				localOpts.HealthCheckPort = 31000
@@ -206,9 +290,11 @@ func TestLBEnsureSDKContract(t *testing.T) {
 				if _, err := lbEnsure(context.Background(), testSDKLBClient(t, recorder), localOpts); err != nil {
 					t.Fatalf("lbEnsure() error = %v", err)
 				}
-				requests, suffix := recorder.posts, "/backendServices"
+				requests := recorder.posts
+				suffix := "/backendServices"
 				if conflict {
-					requests, suffix = recorder.patches, "/backendServices/"+lbBackendServiceName(lbName, listener)
+					requests = recorder.patches
+					suffix = "/backendServices/" + lbBackendServiceName(lbName, listener)
 				}
 				var hc map[string]any
 				for requestPath, body := range requests {
@@ -218,6 +304,9 @@ func TestLBEnsureSDKContract(t *testing.T) {
 				}
 				if hc == nil {
 					t.Fatalf("backend service health check was not sent: %v", requests)
+				}
+				if hc["disableProxyProtocol"] != false {
+					t.Errorf("Cluster HTTP check must explicitly restore PROXY inheritance: %v", hc)
 				}
 				httpCheck, _ := hc["http"].(map[string]any)
 				if hc["tcp"] != nil || httpCheck["path"] != localHealthCheckPath || hc["targetPort"] != float64(31000) {

@@ -3,7 +3,7 @@ module github.com/evroc-oss/evroc-ccm-driver
 go 1.25.0
 
 require (
-	github.com/evroc-oss/evroc-go-sdk v0.7.3
+	github.com/evroc-oss/evroc-go-sdk v0.10.1
 	github.com/google/uuid v1.6.0
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.35.2

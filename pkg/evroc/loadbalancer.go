@@ -233,16 +233,17 @@ func (lb *loadBalancer) ensureLoadBalancer(ctx context.Context, lbName string, s
 
 	hcPort, hcPath := healthCheck(service)
 	_, err = lb.lb.Ensure(ctx, lbEnsureOptions{
-		Name:             lbName,
-		PublicIPRef:      publicIPRef,
-		Listeners:        listeners,
-		BackendRefs:      lb.nodeVMRefs(nodes),
-		ProxyProtocol:    wantsProxyProtocol(service),
-		HealthCheckPort:  hcPort,
-		HealthCheckPath:  hcPath,
-		HealthCheckHost:  service.Annotations[annotationHealthCheckHost],
-		BackendStackType: lb.config.LoadBalancers.StackType,
-		BackendNetwork:   lb.backendNetwork(),
+		Name:                            lbName,
+		PublicIPRef:                     publicIPRef,
+		Listeners:                       listeners,
+		BackendRefs:                     lb.nodeVMRefs(nodes),
+		ProxyProtocol:                   wantsProxyProtocol(service),
+		HealthCheckPort:                 hcPort,
+		HealthCheckDisableProxyProtocol: service.Spec.ExternalTrafficPolicy == v1.ServiceExternalTrafficPolicyLocal,
+		HealthCheckPath:                 hcPath,
+		HealthCheckHost:                 service.Annotations[annotationHealthCheckHost],
+		BackendStackType:                lb.config.LoadBalancers.StackType,
+		BackendNetwork:                  lb.backendNetwork(),
 	})
 	if err != nil {
 		return nil, err

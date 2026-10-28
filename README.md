@@ -86,7 +86,7 @@ kubectl create secret generic evroc-ccm-config \
 
 ```bash
 helm install evroc-ccm oci://ghcr.io/evroc-oss/charts/evroc-ccm \
-  --version 0.3.4 \
+  --version 0.4.0 \
   --namespace evroc-system \
   --set evroc.existingConfigSecret=evroc-ccm-config
 ```
@@ -191,7 +191,15 @@ for another. The CCM points that Service's load balancer health check at its
 port instead of the traffic port, so nodes without a pod are drained and each
 connection is delivered to a pod on the receiving node with no extra hop and no
 node-level SNAT.
-\
+
+For `Local`, CCM disables PROXY protocol on these health checks because
+kube-proxy expects plain HTTP. The `ccm.evroc.com/proxy-protocol` annotation
+still controls application connections. Switching back to `Cluster` restores
+health-check inheritance of the application PROXY setting. This requires the
+platform's `healthCheck.disableProxyProtocol` API support.
+
+This release uses evroc Go SDK `v0.10.1`.
+
 Keep in mind:
 
 - Load is balanced across nodes, not pods. A node with three pods gets the same

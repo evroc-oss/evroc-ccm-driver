@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-26
+
+### Fixed
+
+- Keep health checks plain HTTP with `externalTrafficPolicy: Local` when PROXY protocol is enabled for backend traffic; restore inheritance when switching back to Cluster.
+
+### Changed
+- Use evroc Go SDK v0.10.1 for independent health-check PROXY protocol configuration.
+
 ## [0.3.4] - 2026-10-26
 
 ### Security
@@ -55,7 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial version.
 
-[Unreleased]: https://github.com/evroc-oss/evroc-ccm-driver/compare/v0.3.4...HEAD
+[Unreleased]: https://github.com/evroc-oss/evroc-ccm-driver/compare/v0.4.0...HEAD
 [0.1.2]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.1.2
 [0.1.3]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.1.3
 [0.2.0]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.2.0
@@ -66,3 +75,4 @@ Initial version.
 [0.3.2]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.3.2
 [0.3.3]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.3.3
 [0.3.4]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.3.4
+[0.4.0]: https://github.com/evroc-oss/evroc-ccm-driver/releases/tag/v0.4.0

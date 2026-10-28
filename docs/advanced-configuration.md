@@ -71,6 +71,18 @@ zones. Omit it to let the platform apply its default backend network.
 Load balancer frontends are always IPv4; `ipv6-only` makes the load balancer
 reach backends over IPv6.
 
+## PROXY protocol and Local traffic policy
+
+With `ccm.evroc.com/proxy-protocol: "true"` and
+`externalTrafficPolicy: Local`, CCM sends application traffic with PROXY
+headers but probes kube-proxy's `healthCheckNodePort` at `/healthz` without
+those headers. This allows kube-proxy to report whether the node has local
+endpoints. No additional annotation is needed.
+
+Switching back to `externalTrafficPolicy: Cluster` restores health-check
+inheritance from the backend traffic PROXY setting and clears the Local
+probe overrides.
+
 ## API permissions
 
 The CCM needs access to three APIs:
