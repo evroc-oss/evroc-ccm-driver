@@ -375,7 +375,7 @@ func TestEnsureLoadBalancer(t *testing.T) {
 		if _, err := lb.EnsureLoadBalancer(context.Background(), "cluster", service, testNodes("node-a")); err != nil {
 			t.Fatalf("EnsureLoadBalancer() error = %v", err)
 		}
-		if len(client.ensured) != 1 || !client.ensured[0].ProxyProtocol || client.ensured[0].Listeners[0].BackendPort != 32080 {
+		if len(client.ensured) != 1 || !client.ensured[0].ProxyProtocol || client.ensured[0].HealthCheckDisableProxyProtocol || client.ensured[0].Listeners[0].BackendPort != 32080 {
 			t.Errorf("existing LB was not fully reconciled: %#v", client.ensured)
 		}
 	})
@@ -384,6 +384,7 @@ func TestEnsureLoadBalancer(t *testing.T) {
 		service := testService("api", "default")
 		service.Spec.ExternalTrafficPolicy = v1.ServiceExternalTrafficPolicyLocal
 		service.Spec.HealthCheckNodePort = 31000
+		service.Annotations = map[string]string{annotationProxyProtocol: "true"}
 		client := &recordingLBClient{getErr: evroc.ErrNotFound, address: "203.0.113.3"}
 		lb := newTestLB(client, &recordingPublicIPs{})
 		lbName := lb.GetLoadBalancerName(context.Background(), "cluster", service)
@@ -392,8 +393,15 @@ func TestEnsureLoadBalancer(t *testing.T) {
 		if _, err := lb.EnsureLoadBalancer(context.Background(), "cluster", service, testNodes("node-a")); err != nil {
 			t.Fatalf("EnsureLoadBalancer() error = %v", err)
 		}
-		if len(client.ensured) != 1 || client.ensured[0].HealthCheckPort != 31000 || client.ensured[0].HealthCheckPath != localHealthCheckPath {
+		if len(client.ensured) != 1 || client.ensured[0].HealthCheckPort != 31000 || client.ensured[0].HealthCheckPath != localHealthCheckPath || !client.ensured[0].HealthCheckDisableProxyProtocol || !client.ensured[0].ProxyProtocol {
 			t.Errorf("health check node port was not passed through: %#v", client.ensured)
+		}
+		service.Spec.ExternalTrafficPolicy = v1.ServiceExternalTrafficPolicyCluster
+		if _, err := lb.EnsureLoadBalancer(context.Background(), "cluster", service, testNodes("node-a")); err != nil {
+			t.Fatal(err)
+		}
+		if got := client.ensured[len(client.ensured)-1]; got.HealthCheckDisableProxyProtocol || got.HealthCheckPort != 0 || got.HealthCheckPath != "" || !got.ProxyProtocol {
+			t.Errorf("switching to Cluster did not restore inherited probes: %#v", got)
 		}
 	})
 

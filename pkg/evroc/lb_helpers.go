@@ -64,6 +64,9 @@ type lbEnsureOptions struct {
 	// HealthCheckHost overrides the HTTP Host header. Empty uses the platform default.
 	HealthCheckHost string
 
+	// HealthCheckDisableProxyProtocol keeps kube-proxy probes plain HTTP under Local.
+	HealthCheckDisableProxyProtocol bool
+
 	// BackendStackType is the cluster's IP stack. When "ipv6-only" the backend
 	// services select IPv6 so the load balancer can reach backends that have no
 	// IPv4 address. This is deliberately separate from the frontend address
@@ -102,6 +105,7 @@ func lbEnsure(ctx context.Context, client *loadbalancer.Client, opts lbEnsureOpt
 		svcBuilder := loadbalancer.NewBackendServiceBuilder(svcName).
 			WithLabels(opts.Owner.labels()).
 			WithPort(l.BackendPort).
+			WithHealthCheckDisableProxyProtocol(opts.HealthCheckDisableProxyProtocol).
 			WithBackendPoolRef(client.BackendPoolRef(poolName))
 		if opts.HealthCheckPath != "" {
 			svcBuilder = svcBuilder.WithHTTPHealthCheck(opts.HealthCheckPath)
@@ -132,14 +136,16 @@ func lbEnsure(ctx context.Context, client *loadbalancer.Client, opts lbEnsureOpt
 			if err := owner.checkLB(ctx, client, "backendService", svcName); err != nil {
 				return nil, err
 			}
-			// Clear a removed Host override instead of retaining it in the merge patch.
+			// Clear the previous check type and overrides when the traffic policy changes.
 			hc := svcReq.Spec.HealthCheck
-			var hcPatch any = hc
+			hcPatch := map[string]any{
+				"disableProxyProtocol": hc.DisableProxyProtocol,
+				"targetPort":           hc.TargetPort,
+				"tcp":                  hc.Tcp,
+				"http":                 nil,
+			}
 			if hc.Http != nil {
-				hcPatch = map[string]any{
-					"http":       map[string]any{"path": hc.Http.Path, "host": hc.Http.Host},
-					"targetPort": hc.TargetPort,
-				}
+				hcPatch["http"] = map[string]any{"path": hc.Http.Path, "host": hc.Http.Host}
 			}
 			_, err = client.BackendServices().Patch(ctx, svcName, map[string]any{
 				"spec": map[string]any{
