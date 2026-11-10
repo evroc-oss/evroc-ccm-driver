@@ -22,7 +22,7 @@ ccm:
 
   image:
     repository: ghcr.io/evroc-oss/evroc-ccm-driver
-    tag: v0.4.0
+    tag: v0.4.1
     pullPolicy: IfNotPresent
 
   # Controllers to enable. Names must match k8s.io/cloud-provider/names.
@@ -69,6 +69,12 @@ ccm:
 
   # Additional environment variables
   extraEnv: []
+
+  # Additional pod volumes (for example, a ConfigMap or Secret containing a CA)
+  extraVolumes: []
+
+  # Additional mounts in the evroc-ccm container
+  extraVolumeMounts: []
 
   # Additional arguments to the CCM binary
   extraArgs: []

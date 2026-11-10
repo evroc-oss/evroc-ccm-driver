@@ -71,10 +71,16 @@ spec:
             - name: cloud-config
               mountPath: /etc/evroc
               readOnly: true
+            {{- with .Values.ccm.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: cloud-config
           secret:
             secretName: {{ include "evroc-ccm.configSecretName" . }}
+        {{- with .Values.ccm.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
       tolerations:
         # The CCM must tolerate the 'uninitialized' snd 'not-ready' taint so it can initialize
         # nodes during cluster bootstrap, before other workloads (including
