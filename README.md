@@ -86,13 +86,37 @@ kubectl create secret generic evroc-ccm-config \
 
 ```bash
 helm install evroc-ccm oci://ghcr.io/evroc-oss/charts/evroc-ccm \
-  --version 0.4.0 \
+  --version 0.4.1 \
   --namespace evroc-system \
   --set evroc.existingConfigSecret=evroc-ccm-config
 ```
 
 To install from a local checkout, or to deploy via static manifests instead of
 Helm, see [`docs/deploying-ccm.md`](docs/deploying-ccm.md).
+
+### Custom CA certificates for the evroc API
+
+To trust a private CA, create a ConfigMap containing PEM certificates in the
+release namespace and supply these Helm values:
+
+```yaml
+ccm:
+  extraVolumes:
+    - name: evroc-api-ca
+      configMap:
+        name: evroc-api-ca
+  extraVolumeMounts:
+    - name: evroc-api-ca
+      mountPath: /etc/evroc-ca
+      readOnly: true
+  extraEnv:
+    - name: SSL_CERT_DIR
+      value: /etc/ssl/certs:/etc/evroc-ca
+```
+
+For a Secret, replace `configMap: {name: evroc-api-ca}` with
+`secret: {secretName: evroc-api-ca}`. Mounts apply only to the evroc-ccm container.
+The example preserves system CA trust. Restart CCM pods after CA updates.
 
 ## Features
 
