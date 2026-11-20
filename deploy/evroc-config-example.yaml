@@ -52,7 +52,6 @@ auth:
 
 
 context:
-  organization: "my-org"
   project: "my-project"
   region: "se-sto"
 

@@ -60,7 +60,6 @@ auth:
   service_account_secret: "<base64-encoded-jwk>"
 
 context:
-  organization: "my-org"
   project: "my-project"
   region: "se-sto"
 ```
@@ -86,7 +85,7 @@ kubectl create secret generic evroc-ccm-config \
 
 ```bash
 helm install evroc-ccm oci://ghcr.io/evroc-oss/charts/evroc-ccm \
-  --version 0.4.1 \
+  --version 0.4.2 \
   --namespace evroc-system \
   --set evroc.existingConfigSecret=evroc-ccm-config
 ```

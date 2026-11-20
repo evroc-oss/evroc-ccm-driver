@@ -14,7 +14,6 @@ import (
 
 const minimalYAML = `
 context:
-  organization: my-org
   project: my-project
   region: se-sto
 auth:
@@ -33,9 +32,8 @@ func validConfig() Config {
 		},
 		API: APIConfig{BaseURL: "https://api.evroc.com"},
 		Context: ContextConfig{
-			Organization: "my-org",
-			Project:      "my-project",
-			Region:       "se-sto",
+			Project: "my-project",
+			Region:  "se-sto",
 		},
 		LoadBalancers: LoadBalancerConfig{StackType: StackTypeIPv4Only},
 	}
@@ -129,20 +127,6 @@ func TestValidate(t *testing.T) {
 				c.Auth.ServiceAccountSecret = ""
 			},
 			wantErr: "auth.service_account_secret is required",
-		},
-		{
-			name: "organization is required",
-			mutate: func(c *Config) {
-				c.Context.Organization = ""
-			},
-			wantErr: "context.organization is required",
-		},
-		{
-			name: "organization rejects invalid characters",
-			mutate: func(c *Config) {
-				c.Context.Organization = "org with spaces"
-			},
-			wantErr: "context.organization must contain only alphanumeric",
 		},
 		{
 			name: "project is required",
@@ -375,7 +359,7 @@ func TestStringRedactsCredentials(t *testing.T) {
 			t.Errorf("String() exposed credential %q", secret)
 		}
 	}
-	for _, public := range []string{cfg.Auth.ServiceAccountID, cfg.Context.Organization, "subnet-a", "subnet-b"} {
+	for _, public := range []string{cfg.Auth.ServiceAccountID, cfg.Context.Project, "subnet-a", "subnet-b"} {
 		if !strings.Contains(got, public) {
 			t.Errorf("String() = %q, want it to contain %q", got, public)
 		}
@@ -403,7 +387,7 @@ func TestLoadFromPath(t *testing.T) {
 			t.Fatal(err)
 		}
 		cfg, err := LoadFromPath(path)
-		if err != nil || cfg.Context.Organization != "my-org" {
+		if err != nil || cfg.Context.Project != "my-project" {
 			t.Fatalf("LoadFromPath() = %#v, %v", cfg, err)
 		}
 	})
