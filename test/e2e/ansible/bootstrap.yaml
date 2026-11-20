@@ -174,7 +174,6 @@
               api:
                 base_url: {{ cli_profile.apiURL | to_json }}
               context:
-                organization: {{ cli_profile.organization | to_json }}
                 project: {{ cli_profile.project | to_json }}
                 region: {{ cli_profile.region | to_json }}
               ccm:

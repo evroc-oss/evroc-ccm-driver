@@ -100,11 +100,10 @@ type APIConfig struct {
 	BaseURL string `json:"base_url,omitempty" yaml:"base_url,omitempty"`
 }
 
-// ContextConfig holds the project, region, and organization the CCM operates in.
+// ContextConfig holds the project and region the CCM operates in.
 type ContextConfig struct {
-	Organization string `json:"organization" yaml:"organization"`
-	Project      string `json:"project" yaml:"project"`
-	Region       string `json:"region" yaml:"region"`
+	Project string `json:"project" yaml:"project"`
+	Region  string `json:"region" yaml:"region"`
 }
 
 // LoadBalancerConfig defines load-balancer-specific networking options.
@@ -189,9 +188,8 @@ func (c *Config) SDKConfig() sdkconfig.Config {
 			BaseURL: c.API.BaseURL,
 		},
 		Context: sdkconfig.ContextConfig{
-			Project:      c.Context.Project,
-			Region:       c.Context.Region,
-			Organization: c.Context.Organization,
+			Project: c.Context.Project,
+			Region:  c.Context.Region,
 		},
 	}
 }
@@ -221,12 +219,6 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if c.Context.Organization == "" {
-		return fmt.Errorf("context.organization is required")
-	}
-	if !isValidIdentifier(c.Context.Organization) {
-		return fmt.Errorf("context.organization must contain only alphanumeric characters and hyphens")
-	}
 	if c.Context.Project == "" {
 		return fmt.Errorf("context.project is required")
 	}
